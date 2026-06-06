@@ -14,6 +14,7 @@ the processing object for ``modules.ideogram4.processing.process_images_ideogram
 """
 
 import html
+import json
 import re
 
 import gradio as gr
@@ -75,6 +76,10 @@ def _validation_html(warnings) -> str:
     )
 
 
+def _error_html(message: str) -> str:
+    return f"<div class='ideogram4-warn' style='color:#b00020'>Invalid JSON caption: {html.escape(str(message))}</div>"
+
+
 class ScriptIdeogram4(scripts.ScriptBuiltinUI):
     # section left as the default None so the panel renders in the generic "scripts"
     # area (ui.py setup_ui -> setup_ui_for_section(None)); visibility is then driven
@@ -117,60 +122,66 @@ class ScriptIdeogram4(scripts.ScriptBuiltinUI):
 
             with gr.Group() as builder_group:
                 high_level_description = self._reg("high_level_description", gr.Textbox(
-                    label="High-level description (recommended)", lines=2,
+                    label="High-level description *optional (recommended)", lines=2,
                     placeholder="A medium-shot photograph of a barista pouring latte art in a cozy cafe.",
                     elem_id=eid("ideogram4_hld")))
 
                 with gr.Accordion("Style", open=True):
                     medium = self._reg("medium", gr.Dropdown(
-                        label="medium", choices=MEDIUM_CHOICES, value="photograph",
+                        label="medium *required", choices=MEDIUM_CHOICES, value="photograph",
                         elem_id=eid("ideogram4_medium")))
                     aesthetics = self._reg("aesthetics", gr.Textbox(
-                        label="aesthetics", placeholder="moody, cinematic, desaturated",
+                        label="aesthetics *required", placeholder="moody, cinematic, desaturated",
                         elem_id=eid("ideogram4_aesthetics")))
                     lighting = self._reg("lighting", gr.Textbox(
-                        label="lighting", placeholder="golden hour, rim light",
+                        label="lighting *required", placeholder="golden hour, rim light",
                         elem_id=eid("ideogram4_lighting")))
                     photo = self._reg("photo", gr.Textbox(
-                        label="photo (camera / lens)", placeholder="35mm, f/1.4, bokeh",
+                        label="photo (camera / lens) *required for photograph", placeholder="35mm, f/1.4, bokeh",
                         visible=True, elem_id=eid("ideogram4_photo")))
                     art_style = self._reg("art_style", gr.Textbox(
-                        label="art_style", placeholder="flat vector illustration",
+                        label="art_style *required for non-photo", placeholder="flat vector illustration",
                         visible=False, elem_id=eid("ideogram4_art_style")))
                     style_palette = self._reg("style_palette", gr.Textbox(
-                        label="color_palette (≤16, e.g. #1B1B2F, #FF6B35)",
+                        label="color_palette *optional (max 16, e.g. #1B1B2F, #FF6B35)",
                         placeholder="#FF6B35, #F7C59F, #004E89",
                         elem_id=eid("ideogram4_style_palette")))
 
                 with gr.Accordion("Composition", open=True):
                     background = self._reg("background", gr.Textbox(
-                        label="background (required)", lines=2,
+                        label="background *required", lines=2,
                         placeholder="A calm ocean stretching to a low horizon...",
                         elem_id=eid("ideogram4_background")))
                     element_count = self._reg("element_count", gr.Slider(
-                        label="Number of elements", minimum=0, maximum=MAX_ELEMENTS,
+                        label="Number of elements *required", minimum=0, maximum=MAX_ELEMENTS,
                         step=1, value=1, elem_id=eid("ideogram4_element_count")))
 
                     element_groups = []
+                    el_types, el_texts, el_descs, el_bboxes, el_palettes = [], [], [], [], []
                     for i in range(MAX_ELEMENTS):
                         with gr.Group(visible=(i == 0)) as el_group:
                             gr.Markdown(f"**Element {i + 1}**")
                             el_type = self._reg(f"el{i}_type", gr.Radio(
-                                label="type", choices=["obj", "text"], value="obj",
+                                label="type *required", choices=["obj", "text"], value="obj",
                                 elem_id=eid(f"ideogram4_el{i}_type")))
                             el_text = self._reg(f"el{i}_text", gr.Textbox(
-                                label="text (rendered literally)", visible=False,
+                                label="text *required for text element", visible=False,
                                 elem_id=eid(f"ideogram4_el{i}_text")))
                             el_desc = self._reg(f"el{i}_desc", gr.Textbox(
-                                label="desc", lines=2, elem_id=eid(f"ideogram4_el{i}_desc")))
+                                label="desc *required", lines=2, elem_id=eid(f"ideogram4_el{i}_desc")))
                             el_bbox = self._reg(f"el{i}_bbox", gr.Textbox(
-                                label="bbox y_min, x_min, y_max, x_max (0–1000, optional)",
+                                label="bbox y_min, x_min, y_max, x_max (0-1000) *optional",
                                 placeholder="200, 300, 800, 900",
                                 elem_id=eid(f"ideogram4_el{i}_bbox")))
                             el_palette = self._reg(f"el{i}_palette", gr.Textbox(
-                                label="color_palette (≤5, optional)",
+                                label="color_palette *optional (max 5)",
                                 elem_id=eid(f"ideogram4_el{i}_palette")))
                         element_groups.append(el_group)
+                        el_types.append(el_type)
+                        el_texts.append(el_text)
+                        el_descs.append(el_desc)
+                        el_bboxes.append(el_bbox)
+                        el_palettes.append(el_palette)
 
                         # type radio toggles the literal-text field for this slot
                         el_type.change(
@@ -205,6 +216,10 @@ class ScriptIdeogram4(scripts.ScriptBuiltinUI):
                         elem_id=eid("ideogram4_std")))
 
             with gr.Accordion("JSON preview & validation", open=False):
+                json_import = gr.File(
+                    label="Import JSON caption file (drop or click) *optional",
+                    file_count="single", file_types=[".json"], type="filepath",
+                    elem_id=eid("ideogram4_json_import"))
                 build_btn = gr.Button("Build / refresh JSON", elem_id=eid("ideogram4_build"))
                 json_preview = gr.Textbox(
                     label="Caption JSON (preview)", lines=8, show_copy_button=True,
@@ -232,6 +247,20 @@ class ScriptIdeogram4(scripts.ScriptBuiltinUI):
         build_btn.click(
             fn=self._build_preview, inputs=list(self.field_components),
             outputs=[json_preview, validation_html], queue=False, show_progress=False)
+
+        # Import an external JSON caption file -> reflect into the builder fields.
+        # The output order here MUST match the list returned by _import_json_caption.
+        import_outputs = [
+            plain_text, builder_group, high_level_description, medium, aesthetics, lighting,
+            photo, art_style, style_palette, background, element_count,
+        ]
+        for i in range(MAX_ELEMENTS):
+            import_outputs += [element_groups[i], el_types[i], el_texts[i], el_descs[i], el_bboxes[i], el_palettes[i]]
+        import_outputs += [json_preview, validation_html]
+
+        json_import.change(
+            fn=self._import_json_caption, inputs=[json_import],
+            outputs=import_outputs, queue=False, show_progress=False)
 
         # expose handles for main_entry to wire preset-driven visibility / sizes
         ui_state.group = panel
@@ -300,6 +329,173 @@ class ScriptIdeogram4(scripts.ScriptBuiltinUI):
         caption = assemble_caption(self._build_data(d))
         warnings = CaptionVerifier().verify(caption)
         return dumps(caption), _validation_html(warnings)
+
+    # ---- JSON import (file -> UI fields) -------------------------------------
+    def _caption_to_ui_values(self, caption: dict):
+        """Map a parsed caption dict to flat UI values; returns (values, warnings)."""
+        warnings = []
+        for k in caption:
+            if k not in ("high_level_description", "style_description", "compositional_deconstruction"):
+                warnings.append(f"ignored unsupported top-level key: {k}")
+
+        style = caption.get("style_description") or {}
+        comp = caption.get("compositional_deconstruction") or {}
+
+        medium = (style.get("medium") or "").strip()
+        photo = (style.get("photo") or "").strip()
+        art_style = (style.get("art_style") or "").strip()
+        if not medium:
+            if photo:
+                medium = "photograph"
+            elif art_style:
+                medium = "illustration"
+            else:
+                medium = "photograph"
+
+        def _palette_str(value):
+            return ", ".join(value) if isinstance(value, (list, tuple)) else ""
+
+        def _bbox_str(value):
+            if not isinstance(value, (list, tuple)) or len(value) != 4:
+                return ""
+            try:
+                return ", ".join(str(int(round(float(v)))) for v in value)
+            except (TypeError, ValueError):
+                return ""
+
+        raw_elements = comp.get("elements")
+        if not isinstance(raw_elements, list):
+            raw_elements = []
+        if not raw_elements:
+            warnings.append("imported JSON had no elements")
+        elif len(raw_elements) > MAX_ELEMENTS:
+            warnings.append(f"more than {MAX_ELEMENTS} elements were provided; only the first {MAX_ELEMENTS} were imported")
+
+        elements = []
+        for el in raw_elements[:MAX_ELEMENTS]:
+            el = el or {}
+            etype = el.get("type")
+            if etype not in ("obj", "text"):
+                etype = "obj"
+            elements.append({
+                "type": etype,
+                "text": el.get("text") or "",
+                "desc": el.get("desc") or "",
+                "bbox": _bbox_str(el.get("bbox")),
+                "palette": _palette_str(el.get("color_palette")),
+            })
+
+        values = {
+            "plain_text": False,
+            "high_level_description": caption.get("high_level_description") or "",
+            "medium": medium,
+            "aesthetics": style.get("aesthetics") or "",
+            "lighting": style.get("lighting") or "",
+            "photo": photo,
+            "art_style": art_style,
+            "style_palette": _palette_str(style.get("color_palette")),
+            "background": comp.get("background") or "",
+            "element_count": len(elements),
+            "elements": elements,
+        }
+        return values, warnings
+
+    def _import_result(self, values=None, warnings=None, error=None, no_op=False):
+        """Build the ordered update list matching `import_outputs` in ui()."""
+        # element block = 6 outputs each; total = 11 + 6*MAX_ELEMENTS + 2
+        if no_op:
+            updates = [gr.update()] * (11 + 6 * MAX_ELEMENTS)
+            return updates + [gr.update(), gr.update()]  # json_preview, validation unchanged
+        if error is not None:
+            updates = [gr.update()] * (11 + 6 * MAX_ELEMENTS)
+            return updates + [gr.update(), _error_html(error)]
+
+        medium = values["medium"]
+        count = int(values["element_count"])
+        out = [
+            gr.update(value=False),                                   # plain_text
+            gr.update(visible=True),                                  # builder_group
+            gr.update(value=values["high_level_description"]),       # high_level_description
+            gr.update(value=medium),                                  # medium
+            gr.update(value=values["aesthetics"]),                   # aesthetics
+            gr.update(value=values["lighting"]),                     # lighting
+            gr.update(value=values["photo"], visible=(medium == PHOTO_MEDIUM)),       # photo
+            gr.update(value=values["art_style"], visible=(medium != PHOTO_MEDIUM)),   # art_style
+            gr.update(value=values["style_palette"]),                # style_palette
+            gr.update(value=values["background"]),                   # background
+            gr.update(value=count),                                   # element_count
+        ]
+        for i in range(MAX_ELEMENTS):
+            if i < count:
+                el = values["elements"][i]
+                out += [
+                    gr.update(visible=True),                                          # element_group
+                    gr.update(value=el["type"]),                                      # el_type
+                    gr.update(value=el["text"], visible=(el["type"] == "text")),      # el_text
+                    gr.update(value=el["desc"]),                                       # el_desc
+                    gr.update(value=el["bbox"]),                                       # el_bbox
+                    gr.update(value=el["palette"]),                                    # el_palette
+                ]
+            else:
+                out += [
+                    gr.update(visible=False),     # element_group
+                    gr.update(value="obj"),       # el_type
+                    gr.update(value="", visible=False),  # el_text
+                    gr.update(value=""),          # el_desc
+                    gr.update(value=""),          # el_bbox
+                    gr.update(value=""),          # el_palette
+                ]
+
+        # canonical JSON preview built from the SAME values used on Generate
+        d = {
+            "plain_text": False,
+            "high_level_description": values["high_level_description"],
+            "medium": medium,
+            "aesthetics": values["aesthetics"],
+            "lighting": values["lighting"],
+            "photo": values["photo"],
+            "art_style": values["art_style"],
+            "style_palette": values["style_palette"],
+            "background": values["background"],
+            "element_count": count,
+        }
+        for i, el in enumerate(values["elements"]):
+            d[f"el{i}_type"] = el["type"]
+            d[f"el{i}_text"] = el["text"]
+            d[f"el{i}_desc"] = el["desc"]
+            d[f"el{i}_bbox"] = el["bbox"]
+            d[f"el{i}_palette"] = el["palette"]
+        caption_json = dumps(assemble_caption(self._build_data(d)))
+
+        out += [gr.update(value=caption_json), _validation_html(warnings or [])]
+        return out
+
+    def _import_json_caption(self, file):
+        if not file:
+            return self._import_result(no_op=True)  # e.g. file cleared -> change nothing
+        path = file if isinstance(file, str) else getattr(file, "name", None)
+        if not path:
+            return self._import_result(error="No file provided.")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = f.read()
+        except UnicodeDecodeError:
+            return self._import_result(error="File is not valid UTF-8 text.")
+        except OSError as e:
+            return self._import_result(error=f"Could not read file: {e}")
+        try:
+            caption = json.loads(raw)
+        except (ValueError, TypeError) as e:
+            return self._import_result(error=f"Invalid JSON: {e}")
+        if not isinstance(caption, dict):
+            return self._import_result(error="JSON root is not an object.")
+
+        try:
+            warnings = CaptionVerifier().verify(caption)
+            values, extra = self._caption_to_ui_values(caption)
+        except Exception as e:
+            return self._import_result(error=f"Could not import caption: {e}")
+        return self._import_result(values=values, warnings=warnings + extra)
 
     # ---- generation ---------------------------------------------------------
     def before_process(self, p, *args):
