@@ -42,9 +42,11 @@ def _import_pipeline_class():
 
     raise Ideogram4Error(
         "Could not import Ideogram4Pipeline. Install the official inference code "
-        "(not on PyPI yet):\n"
-        "  pip install git+https://github.com/ideogram-oss/ideogram4.git\n"
-        "or a diffusers build that ships Ideogram4Pipeline.\nTried:\n  "
+        "(not on PyPI yet), then fully restart Forge Neo:\n"
+        "  pip install --no-deps git+https://github.com/ideogram-oss/ideogram4.git\n"
+        "(Forge Neo normally auto-installs this at startup for the 'ideogram4' preset; "
+        "this error means the install was skipped or failed — check your network / git / "
+        "--skip-install.)\nTried:\n  "
         + "\n  ".join(errors)
     )
 

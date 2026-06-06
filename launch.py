@@ -52,9 +52,13 @@ def main():
 
     # Switch Transformers to match the saved UI preset (Ideogram 4.0 needs Qwen3-VL
     # support from transformers >= 4.57). Must run before transformers is imported.
-    from modules_forge.ideogram4_transformers_mode import ensure_ideogram4_transformers_mode
+    from modules_forge.ideogram4_transformers_mode import (
+        ensure_ideogram4_package,
+        ensure_ideogram4_transformers_mode,
+    )
 
     ensure_ideogram4_transformers_mode()
+    ensure_ideogram4_package()
 
     start()
 

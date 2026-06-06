@@ -207,3 +207,60 @@ def _ensure():
         _log(f"switched transformers to {target} for preset {preset!r}")
     finally:
         _release_lock(lock_path)
+
+
+IDEOGRAM4_PACKAGE_SPEC = "git+https://github.com/ideogram-oss/ideogram4.git"
+
+
+def _ideogram4_package_installed() -> bool:
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec("ideogram4") is not None
+    except Exception:
+        return False
+
+
+def ensure_ideogram4_package():
+    """Install the official 'ideogram4' inference package when the preset needs it.
+
+    Mirrors the transformers switch: only for the ideogram4 preset, only if missing,
+    skipped under --skip-install, never blocks startup on failure (the generation-time
+    import gives a friendly error as the backstop). Uses --no-deps so it can't disturb
+    the carefully-pinned transformers / torch / diffusers stack.
+    """
+    try:
+        _ensure_package()
+    except Exception as e:
+        _log(f"unexpected error during ideogram4 package check: {e!r}; continuing startup")
+
+
+def _ensure_package():
+    from modules import launch_utils
+
+    args = launch_utils.args
+    if _read_preset(args.ui_settings_file) != "ideogram4":
+        return
+
+    if _ideogram4_package_installed():
+        return
+
+    _log("official 'ideogram4' inference package is not installed")
+    if args.skip_install:
+        _log(f"--skip-install is set: NOT installing it. Run `pip install --no-deps {IDEOGRAM4_PACKAGE_SPEC}` manually.")
+        return
+
+    _log(f"installing ideogram4 from GitHub (one-time): {IDEOGRAM4_PACKAGE_SPEC}")
+    try:
+        launch_utils.run_pip(f"install --no-deps {IDEOGRAM4_PACKAGE_SPEC}", "ideogram4 (official inference code)")
+    except Exception as e:
+        _log(f"failed to install ideogram4: {e}. Install it manually with `pip install --no-deps {IDEOGRAM4_PACKAGE_SPEC}`")
+        return
+
+    import importlib
+
+    importlib.invalidate_caches()
+    if _ideogram4_package_installed():
+        _log("ideogram4 installed")
+    else:
+        _log("ideogram4 install did not register; a full restart may be required")
