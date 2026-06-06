@@ -147,6 +147,68 @@ def _bridge_rope_config(config):
             config.rope_scaling = merged
 
 
+def _make_compat_create_causal_mask(original):
+    """Return a wrapper bridging the official pipeline's `inputs_embeds=` call to the
+    Transformers 4.57.x `create_causal_mask(input_embeds, ..., cache_position)` API.
+    Factored out so the kwarg-bridging logic is unit-testable without transformers."""
+
+    def compat_create_causal_mask(*args, **kwargs):
+        if "inputs_embeds" in kwargs and "input_embeds" not in kwargs:
+            kwargs["input_embeds"] = kwargs.pop("inputs_embeds")
+
+        input_embeds = kwargs.get("input_embeds")
+        if input_embeds is None and len(args) >= 2:
+            input_embeds = args[1]
+
+        if (kwargs.get("cache_position") is None) and input_embeds is not None:
+            import torch
+
+            kwargs["cache_position"] = torch.arange(input_embeds.shape[1], device=input_embeds.device)
+
+        return original(*args, **kwargs)
+
+    compat_create_causal_mask._ideogram4_inputs_embeds_patch = True
+    return compat_create_causal_mask
+
+
+def _patch_ideogram4_create_causal_mask():
+    """Make the official Ideogram4 pipeline's `create_causal_mask` call work on
+    Transformers 4.57.x (which uses `input_embeds` + required `cache_position`).
+
+    Patches both `transformers.masking_utils.create_causal_mask` and the module-local
+    copies the pipeline imported via `from ... import create_causal_mask`. Idempotent;
+    in-process only (the installed ideogram4 package is not edited).
+    """
+    import inspect
+    import sys
+
+    try:
+        from transformers import masking_utils
+    except Exception:
+        return
+
+    original = getattr(masking_utils, "create_causal_mask", None)
+    if original is None:
+        return
+
+    if getattr(original, "_ideogram4_inputs_embeds_patch", False):
+        target = original  # already wrapped; just (re)propagate to module-locals below
+    else:
+        try:
+            if "inputs_embeds" in inspect.signature(original).parameters:
+                return  # newer API already accepts inputs_embeds; nothing to bridge
+        except (TypeError, ValueError):
+            pass
+        target = _make_compat_create_causal_mask(original)
+        masking_utils.create_causal_mask = target
+        logger.debug("Applied Ideogram 4.0 create_causal_mask compatibility patch")
+
+    for module_name in ("ideogram4.pipeline_ideogram4", "ideogram4.pipeline"):
+        module = sys.modules.get(module_name)
+        if module is not None and getattr(module, "create_causal_mask", None) is not None:
+            module.create_causal_mask = target
+
+
 def _patch_qwen3_vl_rope_parameters():
     """Bridge Ideogram 4.0's Qwen3-VL config `rope_parameters` to Transformers 4.57.x.
 
@@ -283,6 +345,7 @@ def get_pipeline(model_path: str, quantization: str = "nf4", offline_mode: bool 
     _apply_hf_token()
     _patch_transformers_extra_special_tokens()
     _patch_qwen3_vl_rope_parameters()
+    _patch_ideogram4_create_causal_mask()
 
     import torch
 
