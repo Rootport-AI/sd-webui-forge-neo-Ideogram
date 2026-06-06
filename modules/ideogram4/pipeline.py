@@ -308,27 +308,51 @@ def _check_transformers_for_ideogram4():
         )
 
 
-def get_pipeline(model_path: str, quantization: str = "nf4", offline_mode: bool = False):
-    """Load (and cache) the Ideogram4Pipeline.
+def _raise_friendly_load_error(e, weights_repo, offline_mode):
+    """Re-raise a load failure as a user-actionable Ideogram4Error (or re-raise as-is).
+    Must be called from within an ``except`` block."""
+    msg = str(e)
+    name = type(e).__name__
+    lower = msg.lower()
+    if offline_mode and (
+        "offline" in name.lower() or "localentrynotfound" in name.lower() or "offline" in lower
+        or ("cache" in lower and ("cannot" in lower or "not found" in lower or "no such" in lower))
+    ):
+        raise Ideogram4Error(
+            "Ideogram 4.0 offline mode is enabled, but required weights are not "
+            "available in the local Hugging Face cache. Disable offline mode and run "
+            "once online after accepting the Hugging Face license gate."
+        ) from e
+    if "Gated" in name or "gated" in lower or "401" in msg or "403" in msg:
+        raise Ideogram4Error(
+            "Access to the Ideogram 4.0 weights was denied. Accept the license at "
+            f"https://huggingface.co/{weights_repo} and set an HF token "
+            "(Settings → 'Ideogram 4.0' → 'HF token', or the HF_TOKEN env var)."
+        ) from e
+    raise
+
+
+def get_pipeline(model_path: str, quantization: str = "nf4", offline_mode: bool = False, low_vram_mode: str = "OFF"):
+    """Load (and cache) the Ideogram 4.0 pipeline.
 
     ``model_path`` is a Hugging Face repo id (e.g. ``ideogram-ai/ideogram-4-nf4``)
     or anything the official loader accepts as ``weights_repo``; if empty it
     defaults to the gated repo for the chosen ``quantization`` (nf4 / fp8).
 
-    ``offline_mode`` forces huggingface_hub / transformers to use only the local
-    cache (no network); enable it once all required files are cached.
+    ``offline_mode`` forces huggingface_hub / transformers to use only the local cache.
 
-    The official ``Ideogram4Pipeline.from_pretrained`` is keyword-only and takes a
-    ``config=Ideogram4PipelineConfig(weights_repo=...)`` plus ``device`` / ``dtype``
-    (NOT a diffusers-style positional path). Raises ``Ideogram4Error`` with an
-    actionable message on misconfiguration.
+    ``low_vram_mode`` (``"OFF"`` | ``"16GB"``): ``OFF`` returns the official
+    ``Ideogram4Pipeline`` (all components resident); ``16GB`` returns
+    ``LowVramIdeogram4Pipeline``, which loads components in stages and avoids the dense
+    conditioning tensors. Raises ``Ideogram4Error`` with an actionable message.
     """
     quantization = (quantization or "nf4").lower()
+    low_vram_mode = (low_vram_mode or "OFF").upper()
     weights_repo = model_path or DEFAULT_REPOS.get(quantization, DEFAULT_REPOS["nf4"])
 
     # offline_mode is intentionally NOT part of the cache key: once loaded the
     # pipeline runs locally regardless, and a cached pipe is reused either way.
-    cache_key = (weights_repo, quantization)
+    cache_key = (weights_repo, quantization, low_vram_mode)
     if cache_key in _PIPELINE_CACHE:
         return _PIPELINE_CACHE[cache_key]
 
@@ -349,6 +373,19 @@ def get_pipeline(model_path: str, quantization: str = "nf4", offline_mode: bool 
 
     import torch
 
+    if low_vram_mode == "16GB":
+        from modules.ideogram4.low_vram_pipeline import LowVramIdeogram4Pipeline
+
+        logger.info("Loading Ideogram 4.0 (low VRAM 16GB) from %s (%s, offline=%s)", weights_repo, quantization, offline_mode)
+        try:
+            pipe = LowVramIdeogram4Pipeline(weights_repo, quantization=quantization, offline_mode=offline_mode)
+        except Ideogram4Error:
+            raise
+        except Exception as e:
+            _raise_friendly_load_error(e, weights_repo, offline_mode)
+        _PIPELINE_CACHE[cache_key] = pipe
+        return pipe
+
     logger.info("Loading Ideogram 4.0 pipeline from %s (%s, offline=%s)", weights_repo, quantization, offline_mode)
     try:
         with _offline_env(offline_mode):
@@ -363,22 +400,7 @@ def get_pipeline(model_path: str, quantization: str = "nf4", offline_mode: bool 
     except Ideogram4Error:
         raise
     except Exception as e:
-        msg = str(e)
-        name = type(e).__name__
-        lower = msg.lower()
-        if offline_mode and ("offline" in name.lower() or "localentrynotfound" in name.lower() or "offline" in lower or ("cache" in lower and ("cannot" in lower or "not found" in lower or "no such" in lower))):
-            raise Ideogram4Error(
-                "Ideogram 4.0 offline mode is enabled, but required weights are not "
-                "available in the local Hugging Face cache. Disable offline mode and run "
-                "once online after accepting the Hugging Face license gate."
-            ) from e
-        if "Gated" in name or "gated" in msg.lower() or "401" in msg or "403" in msg:
-            raise Ideogram4Error(
-                "Access to the Ideogram 4.0 weights was denied. Accept the license at "
-                f"https://huggingface.co/{weights_repo} and set an HF token "
-                "(Settings → 'Ideogram 4.0' → 'HF token', or the HF_TOKEN env var)."
-            ) from e
-        raise
+        _raise_friendly_load_error(e, weights_repo, offline_mode)
 
     _PIPELINE_CACHE[cache_key] = pipe
     return pipe
@@ -416,6 +438,7 @@ def call_pipeline(
     transparent: bool = False,
     seed=None,
     num_images: int = 1,
+    step_callback=None,
 ):
     """Call the pipeline, passing only kwargs its ``__call__`` actually accepts.
 
@@ -453,6 +476,9 @@ def call_pipeline(
         # official pipeline runs its own caption verifier and raises by default;
         # we surface warnings ourselves (spec §4.5), so never let it block generation
         (("raise_on_caption_issues",), False),
+        # low VRAM pipeline accepts a per-step callback (official pipe does not → dropped,
+        # progress there comes from the conditional_transformer forward hook instead)
+        (("step_callback",), step_callback),
     ]
 
     kwargs = {}

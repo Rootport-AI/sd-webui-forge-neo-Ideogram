@@ -188,6 +188,10 @@ class ScriptIdeogram4(scripts.ScriptBuiltinUI):
                 offline_mode = self._reg("offline_mode", gr.Checkbox(
                     label="Offline mode", value=False, elem_id=eid("ideogram4_offline"),
                     info="Use cached Ideogram 4.0 weights only. Enable this after the first successful online generation/download."))
+                low_vram_mode = self._reg("low_vram_mode", gr.Radio(
+                    label="Low VRAM mode", choices=["OFF", "16GB"], value="OFF",
+                    elem_id=eid("ideogram4_low_vram_mode"),
+                    info="16GB: load text encoder / transformers / VAE in stages and avoid dense conditioning tensors (slower, fits 16GB GPUs)."))
                 resolution_preset = self._reg("resolution_preset", gr.Dropdown(
                     label="Resolution Preset", choices=list(RESOLUTION_PRESETS.keys()),
                     value="Custom", elem_id=eid("ideogram4_resolution")))
@@ -241,6 +245,7 @@ class ScriptIdeogram4(scripts.ScriptBuiltinUI):
             (std, "Ideogram std"),
             (transparent, "Ideogram transparent"),
             (offline_mode, "Ideogram offline"),
+            (low_vram_mode, "Ideogram low VRAM"),
         ]
 
         return list(self.field_components)
@@ -334,6 +339,7 @@ class ScriptIdeogram4(scripts.ScriptBuiltinUI):
             "std": std,
             "transparent": bool(d.get("transparent")),
             "offline_mode": bool(d.get("offline_mode")),
+            "low_vram_mode": d.get("low_vram_mode") or "OFF",
             "model_path": getattr(shared.opts, "ideogram4_model_path", ""),
             "quantization": getattr(shared.opts, "ideogram4_quantization", "nf4"),
         }

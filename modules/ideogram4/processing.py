@@ -48,21 +48,23 @@ def _step_progress(pipe, steps, label):
     bar = tqdm.tqdm(total=steps, desc=label, file=shared.progress_print_out, disable=disable, position=0, leave=True)
     state.sampling_step = 0
 
-    transformer = getattr(pipe, "conditional_transformer", None)
-    handle = None
-
-    def _hook(_module, _args):
+    def tick(*_args, **_kwargs):
         if state.interrupted or state.stopping_generation:
             raise InterruptedException
         bar.update(1)
         state.sampling_step = min(state.sampling_step + 1, steps)
         shared.total_tqdm.update()
 
+    # OFF pipeline: the official Ideogram4Pipeline exposes conditional_transformer, so a
+    # forward pre-hook ticks per step. Low-VRAM pipeline has no persistent transformer →
+    # it is ticked via the `step_callback` we yield below instead.
+    transformer = getattr(pipe, "conditional_transformer", None)
+    handle = None
     if transformer is not None and hasattr(transformer, "register_forward_pre_hook"):
-        handle = transformer.register_forward_pre_hook(_hook)
+        handle = transformer.register_forward_pre_hook(lambda _m, _a: tick())
 
     try:
-        yield
+        yield tick
     finally:
         if handle is not None:
             handle.remove()
@@ -115,6 +117,7 @@ def _resolve_params(p) -> dict:
         "std": params.get("std") if params.get("std") is not None else preset.std,
         "transparent": bool(params.get("transparent", False)),
         "offline_mode": bool(params.get("offline_mode", False)),
+        "low_vram_mode": params.get("low_vram_mode") or "OFF",
         "model_path": params.get("model_path") or getattr(shared.opts, "ideogram4_model_path", ""),
         "quantization": params.get("quantization") or getattr(shared.opts, "ideogram4_quantization", "nf4"),
     }
@@ -137,6 +140,7 @@ def _build_infotext(p, caption, negative, seed, params, width, height) -> str:
         "Ideogram std": params["std"],
         "Ideogram transparent": "true" if params["transparent"] else None,
         "Ideogram offline": "true" if params["offline_mode"] else None,
+        "Ideogram low VRAM": params["low_vram_mode"] if params.get("low_vram_mode", "OFF") != "OFF" else None,
         "Ideogram quant": params["quantization"],
         **(getattr(p, "extra_generation_params", None) or {}),
     }
@@ -195,7 +199,10 @@ def process_images_ideogram4(p):
     p.sd_vae_hash = None
 
     # ---- load pipeline (raises Ideogram4Error → shown in the UI) --------------
-    pipe = ig_pipeline.get_pipeline(params["model_path"], params["quantization"], offline_mode=params["offline_mode"])
+    pipe = ig_pipeline.get_pipeline(
+        params["model_path"], params["quantization"],
+        offline_mode=params["offline_mode"], low_vram_mode=params["low_vram_mode"],
+    )
 
     state.job_count = n_images
     state.job_no = 0
@@ -224,7 +231,7 @@ def process_images_ideogram4(p):
 
         img_start = time.time()
         try:
-            with _step_progress(pipe, params["steps"], f"Ideogram {i + 1}/{n_images}"):
+            with _step_progress(pipe, params["steps"], f"Ideogram {i + 1}/{n_images}") as tick:
                 produced = ig_pipeline.call_pipeline(
                     pipe,
                     caption,
@@ -238,6 +245,7 @@ def process_images_ideogram4(p):
                     negative_prompt=(negative or None),
                     transparent=params["transparent"],
                     seed=img_seed,
+                    step_callback=tick,
                 )
         except InterruptedException:
             logger.info("Ideogram 4.0: interrupted at image %d/%d", i + 1, n_images)
