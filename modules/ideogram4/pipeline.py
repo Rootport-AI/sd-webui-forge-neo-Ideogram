@@ -99,6 +99,40 @@ def _apply_hf_token():
         os.environ["HUGGING_FACE_HUB_TOKEN"] = settings_token
 
 
+def _patch_transformers_extra_special_tokens():
+    """Work around an Ideogram-4 tokenizer / Transformers 4.56.x incompatibility.
+
+    `ideogram-ai/ideogram-4-*` ships `tokenizer_config.json` with `extra_special_tokens`
+    as a LIST, but Transformers' `PreTrainedTokenizerBase._set_model_specific_special_tokens`
+    treats it as a mapping (calls `.keys()`/`.items()`) and crashes with
+    `AttributeError: 'list' object has no attribute 'keys'` before the pipeline finishes
+    loading. Those tokens already exist in the Qwen vocab, so when a list is received we
+    simply skip the model-specific special-token map step.
+
+    Idempotent, applied in-process only (no cache/site-packages files are modified).
+    """
+    try:
+        from transformers import PreTrainedTokenizerBase
+    except Exception:
+        return
+
+    if getattr(PreTrainedTokenizerBase, "_ideogram4_extra_special_tokens_patch", False):
+        return
+
+    original = getattr(PreTrainedTokenizerBase, "_set_model_specific_special_tokens", None)
+    if original is None:
+        return
+
+    def patched(self, special_tokens, *args, **kwargs):
+        if isinstance(special_tokens, list):
+            return
+        return original(self, special_tokens, *args, **kwargs)
+
+    PreTrainedTokenizerBase._set_model_specific_special_tokens = patched
+    PreTrainedTokenizerBase._ideogram4_extra_special_tokens_patch = True
+    logger.debug("Applied Ideogram 4.0 tokenizer extra_special_tokens compatibility patch")
+
+
 @contextlib.contextmanager
 def _offline_env(enabled: bool):
     """Temporarily force HF / transformers offline for the duration of the load, then
@@ -161,6 +195,7 @@ def get_pipeline(model_path: str, quantization: str = "nf4", offline_mode: bool 
     PipelineClass = _import_pipeline_class()
     ConfigClass = _import_config_class()
     _apply_hf_token()
+    _patch_transformers_extra_special_tokens()
 
     import torch
 
