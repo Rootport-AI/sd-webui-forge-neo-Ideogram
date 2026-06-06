@@ -162,6 +162,46 @@ def _offline_env(enabled: bool):
                 os.environ[k] = old
 
 
+def _check_transformers_for_ideogram4():
+    """Gate generation when Transformers is too old for Qwen3-VL (spec: Ideogram4 mode).
+
+    Does NOT install anything — the Transformers swap happens at startup
+    (modules_forge.ideogram4_transformers_mode) based on the saved UI preset.
+    """
+    try:
+        import importlib.metadata
+
+        ver = importlib.metadata.version("transformers")
+    except Exception:
+        ver = None
+
+    too_old = False
+    if ver is not None:
+        try:
+            from packaging.version import Version
+
+            too_old = Version(ver) < Version("4.57.1")
+        except Exception:
+            too_old = False
+
+    qwen_ok = True
+    try:
+        import transformers.models.qwen3_vl  # noqa: F401
+    except Exception:
+        qwen_ok = False
+
+    if too_old or not qwen_ok:
+        raise Ideogram4Error(
+            "Ideogram 4.0 requires Transformers 4.57.1 or newer because its text encoder "
+            "uses Qwen3-VL.\n"
+            f"This Forge Neo process is currently running Transformers {ver}.\n\n"
+            "Please select the Ideogram4 UI preset, then fully restart Forge Neo from "
+            "webui-user.bat/webui.bat.\n"
+            "Settings -> Reload UI is not enough because Python packages are already "
+            "imported in the current process."
+        )
+
+
 def get_pipeline(model_path: str, quantization: str = "nf4", offline_mode: bool = False):
     """Load (and cache) the Ideogram4Pipeline.
 
@@ -185,6 +225,8 @@ def get_pipeline(model_path: str, quantization: str = "nf4", offline_mode: bool 
     cache_key = (weights_repo, quantization)
     if cache_key in _PIPELINE_CACHE:
         return _PIPELINE_CACHE[cache_key]
+
+    _check_transformers_for_ideogram4()
 
     if not _cuda_available():
         raise Ideogram4Error(
