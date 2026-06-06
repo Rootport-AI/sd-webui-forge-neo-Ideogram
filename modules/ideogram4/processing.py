@@ -12,13 +12,61 @@ All ``modules.*`` imports are done lazily inside the function to avoid an import
 cycle with ``modules.processing``.
 """
 
+import contextlib
 import logging
 import random
+import time
 
 from modules.ideogram4 import pipeline as ig_pipeline
 from modules.ideogram4.sampler_configs import DEFAULT_PRESET, get_preset
 
 logger = logging.getLogger("ideogram4")
+
+
+@contextlib.contextmanager
+def _step_progress(pipe, steps, label):
+    """Console + WebUI progress for one Ideogram 4.0 image, mirroring the SDXL look.
+
+    The official pipeline runs its own denoising loop with no step callback, but it
+    calls ``conditional_transformer`` exactly once per step — so a forward pre-hook on
+    that module gives a real per-step tqdm bar (step x/y, it/s, elapsed, ETA) and also
+    drives ``shared.state`` / ``shared.total_tqdm`` (Total progress bar + WebUI %).
+    Pressing Interrupt/Stop aborts mid-image via ``InterruptedException``.
+    """
+    import tqdm
+
+    from modules import shared
+    from modules.shared import state
+
+    try:
+        from modules.sd_samplers_common import InterruptedException
+    except Exception:  # pragma: no cover
+        class InterruptedException(Exception):
+            pass
+
+    disable = getattr(shared.cmd_opts, "disable_console_progressbars", False)
+    bar = tqdm.tqdm(total=steps, desc=label, file=shared.progress_print_out, disable=disable, position=0, leave=True)
+    state.sampling_step = 0
+
+    transformer = getattr(pipe, "conditional_transformer", None)
+    handle = None
+
+    def _hook(_module, _args):
+        if state.interrupted or state.stopping_generation:
+            raise InterruptedException
+        bar.update(1)
+        state.sampling_step = min(state.sampling_step + 1, steps)
+        shared.total_tqdm.update()
+
+    if transformer is not None and hasattr(transformer, "register_forward_pre_hook"):
+        handle = transformer.register_forward_pre_hook(_hook)
+
+    try:
+        yield
+    finally:
+        if handle is not None:
+            handle.remove()
+        bar.close()
 
 MIN_DIM = 256
 MAX_DIM = 2048
@@ -103,6 +151,12 @@ def process_images_ideogram4(p):
     from modules.processing import Processed, get_fixed_seed
     from modules.shared import opts, state
 
+    try:
+        from modules.sd_samplers_common import InterruptedException
+    except Exception:
+        class InterruptedException(Exception):
+            pass
+
     warnings: list[str] = list(getattr(p, "ideogram4_warnings", None) or [])
 
     params = _resolve_params(p)
@@ -145,11 +199,18 @@ def process_images_ideogram4(p):
 
     state.job_count = n_images
     state.job_no = 0
+    state.sampling_steps = params["steps"]  # sizes the "Total progress" bar (job_count * steps)
+
+    logger.info(
+        "Ideogram 4.0: generating %d image(s) at %dx%d, preset %s (%d steps)",
+        n_images, width, height, params["preset"], params["steps"],
+    )
 
     output_images = []
     infotexts = []
     save_samples = not p.do_not_save_samples
     enable_pnginfo = getattr(opts, "enable_pnginfo", True)
+    run_start = time.time()
 
     for i in range(n_images):
         if state.interrupted or state.stopping_generation:
@@ -161,20 +222,28 @@ def process_images_ideogram4(p):
         state.job = f"Ideogram 4.0 — image {i + 1}/{n_images}"
         state.textinfo = state.job
 
-        produced = ig_pipeline.call_pipeline(
-            pipe,
-            caption,
-            height=height,
-            width=width,
-            steps=params["steps"],
-            guidance_scale=params["guidance_scale"],
-            guidance_schedule=params["guidance_schedule"],
-            mu=params["mu"],
-            std=params["std"],
-            negative_prompt=(negative or None),
-            transparent=params["transparent"],
-            seed=img_seed,
-        )
+        img_start = time.time()
+        try:
+            with _step_progress(pipe, params["steps"], f"Ideogram {i + 1}/{n_images}"):
+                produced = ig_pipeline.call_pipeline(
+                    pipe,
+                    caption,
+                    height=height,
+                    width=width,
+                    steps=params["steps"],
+                    guidance_scale=params["guidance_scale"],
+                    guidance_schedule=params["guidance_schedule"],
+                    mu=params["mu"],
+                    std=params["std"],
+                    negative_prompt=(negative or None),
+                    transparent=params["transparent"],
+                    seed=img_seed,
+                )
+        except InterruptedException:
+            logger.info("Ideogram 4.0: interrupted at image %d/%d", i + 1, n_images)
+            break
+
+        logger.info("Ideogram 4.0: image %d/%d done in %.1fs (seed %d)", i + 1, n_images, time.time() - img_start, img_seed)
 
         for image in produced:
             infotext = _build_infotext(p, caption, negative, img_seed, params, width, height)
@@ -189,6 +258,9 @@ def process_images_ideogram4(p):
             infotexts.append(infotext)
 
         state.nextjob()
+
+    if output_images:
+        logger.info("Ideogram 4.0: %d image(s) in %.1fs total", len(output_images), time.time() - run_start)
 
     # ---- grid -----------------------------------------------------------------
     index_of_first_image = 0

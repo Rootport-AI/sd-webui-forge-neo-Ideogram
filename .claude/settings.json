@@ -12,7 +12,8 @@
       "Bash(python -m py_compile modules/ideogram4/*.py modules/processing_scripts/ideogram4.py modules_forge/presets.py modules_forge/shared_options.py modules_forge/main_entry.py modules/processing.py)",
       "Bash(rm _ideogram4_selftest.py)",
       "Bash(python -m py_compile modules/ideogram4/pipeline.py)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(python -m py_compile modules/ideogram4/processing.py)"
     ]
   }
 }
