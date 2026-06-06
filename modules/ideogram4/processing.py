@@ -117,7 +117,7 @@ def _resolve_params(p) -> dict:
         "std": params.get("std") if params.get("std") is not None else preset.std,
         "transparent": bool(params.get("transparent", False)),
         "offline_mode": bool(params.get("offline_mode", False)),
-        "low_vram_mode": params.get("low_vram_mode") or "OFF",
+        "low_vram_mode": params.get("low_vram_mode") or "16GB",
         "model_path": params.get("model_path") or getattr(shared.opts, "ideogram4_model_path", ""),
         "quantization": params.get("quantization") or getattr(shared.opts, "ideogram4_quantization", "nf4"),
     }

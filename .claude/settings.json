@@ -21,7 +21,8 @@
       "Bash(cp \"s:/30_OriginalApps/sd-webui-forge-neo/modules/ideogram4/low_vram_pipeline.py\" \"modules/ideogram4/low_vram_pipeline.py\")",
       "Bash(rm -rf \"s:/30_OriginalApps/sd-webui-forge-neo\")",
       "Bash(python -m py_compile modules/processing_scripts/ideogram4.py)",
-      "Bash(ls _ig4*.py)"
+      "Bash(ls _ig4*.py)",
+      "Bash(python -m py_compile modules/processing_scripts/ideogram4.py modules/ideogram4/processing.py)"
     ],
     "additionalDirectories": [
       "s:\\30_OriginalApps\\sd-webui-forge-neo\\modules\\ideogram4"
