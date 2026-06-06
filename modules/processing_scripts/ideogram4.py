@@ -120,6 +120,17 @@ class ScriptIdeogram4(scripts.ScriptBuiltinUI):
                 label="Plain-text mode (use the main Prompt box instead of the builder)",
                 value=False, elem_id=eid("ideogram4_plain_text")))
 
+            with gr.Accordion("Import JSON caption file", open=False, elem_id=eid("ideogram4_import_accordion")):
+                gr.Markdown(
+                    "Drag & drop a `.json` Ideogram 4.0 caption onto the box below "
+                    "(or click it to browse) to fill in the fields. This turns off "
+                    "Plain-text mode and updates the JSON preview."
+                )
+                json_import = gr.File(
+                    label="Import JSON caption file (drop or click) *optional",
+                    file_count="single", file_types=[".json"], type="filepath",
+                    elem_id=eid("ideogram4_json_import"))
+
             with gr.Group() as builder_group:
                 high_level_description = self._reg("high_level_description", gr.Textbox(
                     label="High-level description *optional (recommended)", lines=2,
@@ -216,10 +227,6 @@ class ScriptIdeogram4(scripts.ScriptBuiltinUI):
                         elem_id=eid("ideogram4_std")))
 
             with gr.Accordion("JSON preview & validation", open=False):
-                json_import = gr.File(
-                    label="Import JSON caption file (drop or click) *optional",
-                    file_count="single", file_types=[".json"], type="filepath",
-                    elem_id=eid("ideogram4_json_import"))
                 build_btn = gr.Button("Build / refresh JSON", elem_id=eid("ideogram4_build"))
                 json_preview = gr.Textbox(
                     label="Caption JSON (preview)", lines=8, show_copy_button=True,
