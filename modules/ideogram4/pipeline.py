@@ -133,6 +133,50 @@ def _patch_transformers_extra_special_tokens():
     logger.debug("Applied Ideogram 4.0 tokenizer extra_special_tokens compatibility patch")
 
 
+def _bridge_rope_config(config):
+    """Copy/merge a config's `rope_parameters` into `rope_scaling` (pure; testable)."""
+    rope_scaling = getattr(config, "rope_scaling", None)
+    rope_parameters = getattr(config, "rope_parameters", None)
+
+    if rope_scaling is None and isinstance(rope_parameters, dict):
+        config.rope_scaling = rope_parameters
+    elif isinstance(rope_scaling, dict) and isinstance(rope_parameters, dict):
+        if "mrope_section" not in rope_scaling and "mrope_section" in rope_parameters:
+            merged = dict(rope_parameters)
+            merged.update(rope_scaling)
+            config.rope_scaling = merged
+
+
+def _patch_qwen3_vl_rope_parameters():
+    """Bridge Ideogram 4.0's Qwen3-VL config `rope_parameters` to Transformers 4.57.x.
+
+    Ideogram 4.0's `text_encoder/config.json` uses the newer `rope_parameters` block
+    (with `mrope_section`), but Transformers 4.57.x Qwen3-VL reads `rope_scaling`
+    (left as None), so `Qwen3VLTextRotaryEmbedding.__init__` crashes with
+    `AttributeError: 'NoneType' object has no attribute 'get'`. We copy/merge
+    `rope_parameters` into `rope_scaling` on the config before the original init runs.
+
+    Idempotent, in-process only (no config.json / site-packages files are modified).
+    """
+    try:
+        from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLTextRotaryEmbedding
+    except Exception:
+        return
+
+    if getattr(Qwen3VLTextRotaryEmbedding, "_ideogram4_rope_parameters_patch", False):
+        return
+
+    original = Qwen3VLTextRotaryEmbedding.__init__
+
+    def patched(self, config, *args, **kwargs):
+        _bridge_rope_config(config)
+        return original(self, config, *args, **kwargs)
+
+    Qwen3VLTextRotaryEmbedding.__init__ = patched
+    Qwen3VLTextRotaryEmbedding._ideogram4_rope_parameters_patch = True
+    logger.debug("Applied Ideogram 4.0 Qwen3-VL rope_parameters compatibility patch")
+
+
 @contextlib.contextmanager
 def _offline_env(enabled: bool):
     """Temporarily force HF / transformers offline for the duration of the load, then
@@ -238,6 +282,7 @@ def get_pipeline(model_path: str, quantization: str = "nf4", offline_mode: bool 
     ConfigClass = _import_config_class()
     _apply_hf_token()
     _patch_transformers_extra_special_tokens()
+    _patch_qwen3_vl_rope_parameters()
 
     import torch
 
