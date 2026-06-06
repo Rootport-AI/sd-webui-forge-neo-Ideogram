@@ -80,26 +80,43 @@ DEFAULT_REPOS = {
 
 def _apply_hf_token():
     """Export the configured HF token to the environment so huggingface_hub picks it
-    up — the official from_pretrained() has no token argument."""
-    token = None
+    up — the official from_pretrained() has no token argument.
+
+    A token set in Settings is authoritative (so 'Apply settings' is reflected on the
+    next generation without a UI reload); when Settings is empty we leave any
+    externally-provided HF_TOKEN / HUGGING_FACE_HUB_TOKEN untouched.
+    """
+    settings_token = ""
     try:
         from modules import shared
 
-        token = getattr(shared.opts, "ideogram4_hf_token", None)
+        settings_token = (getattr(shared.opts, "ideogram4_hf_token", "") or "").strip()
     except Exception:
         pass
-    token = token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
-    if token:
-        os.environ.setdefault("HF_TOKEN", token)
-        os.environ.setdefault("HUGGING_FACE_HUB_TOKEN", token)
+    if settings_token:
+        os.environ["HF_TOKEN"] = settings_token
+        os.environ["HUGGING_FACE_HUB_TOKEN"] = settings_token
 
 
-def get_pipeline(model_path: str, quantization: str = "nf4"):
+def _apply_offline_mode():
+    """Force huggingface_hub / transformers into offline mode (cache-only).
+
+    We only ever SET these — never clear them — so a user who enabled offline mode
+    via external environment variables is not overridden when the checkbox is off.
+    """
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
+
+def get_pipeline(model_path: str, quantization: str = "nf4", offline_mode: bool = False):
     """Load (and cache) the Ideogram4Pipeline.
 
     ``model_path`` is a Hugging Face repo id (e.g. ``ideogram-ai/ideogram-4-nf4``)
     or anything the official loader accepts as ``weights_repo``; if empty it
     defaults to the gated repo for the chosen ``quantization`` (nf4 / fp8).
+
+    ``offline_mode`` forces huggingface_hub / transformers to use only the local
+    cache (no network); enable it once all required files are cached.
 
     The official ``Ideogram4Pipeline.from_pretrained`` is keyword-only and takes a
     ``config=Ideogram4PipelineConfig(weights_repo=...)`` plus ``device`` / ``dtype``
@@ -109,6 +126,8 @@ def get_pipeline(model_path: str, quantization: str = "nf4"):
     quantization = (quantization or "nf4").lower()
     weights_repo = model_path or DEFAULT_REPOS.get(quantization, DEFAULT_REPOS["nf4"])
 
+    # offline_mode is intentionally NOT part of the cache key: once loaded the
+    # pipeline runs locally regardless, and a cached pipe is reused either way.
     cache_key = (weights_repo, quantization)
     if cache_key in _PIPELINE_CACHE:
         return _PIPELINE_CACHE[cache_key]
@@ -122,10 +141,12 @@ def get_pipeline(model_path: str, quantization: str = "nf4"):
     PipelineClass = _import_pipeline_class()
     ConfigClass = _import_config_class()
     _apply_hf_token()
+    if offline_mode:
+        _apply_offline_mode()
 
     import torch
 
-    logger.info("Loading Ideogram 4.0 pipeline from %s (%s)", weights_repo, quantization)
+    logger.info("Loading Ideogram 4.0 pipeline from %s (%s, offline=%s)", weights_repo, quantization, offline_mode)
     try:
         if ConfigClass is not None:
             config = ConfigClass(weights_repo=weights_repo)
@@ -139,7 +160,15 @@ def get_pipeline(model_path: str, quantization: str = "nf4"):
         raise
     except Exception as e:
         msg = str(e)
-        if "Gated" in type(e).__name__ or "gated" in msg.lower() or "401" in msg or "403" in msg:
+        name = type(e).__name__
+        lower = msg.lower()
+        if offline_mode and ("offline" in name.lower() or "localentrynotfound" in name.lower() or "offline" in lower or ("cache" in lower and ("cannot" in lower or "not found" in lower or "no such" in lower))):
+            raise Ideogram4Error(
+                "Ideogram 4.0 offline mode is enabled, but required weights are not "
+                "available in the local Hugging Face cache. Disable offline mode and run "
+                "once online after accepting the Hugging Face license gate."
+            ) from e
+        if "Gated" in name or "gated" in msg.lower() or "401" in msg or "403" in msg:
             raise Ideogram4Error(
                 "Access to the Ideogram 4.0 weights was denied. Accept the license at "
                 f"https://huggingface.co/{weights_repo} and set an HF token "

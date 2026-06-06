@@ -66,6 +66,7 @@ def _resolve_params(p) -> dict:
         "mu": params.get("mu") if params.get("mu") is not None else preset.mu,
         "std": params.get("std") if params.get("std") is not None else preset.std,
         "transparent": bool(params.get("transparent", False)),
+        "offline_mode": bool(params.get("offline_mode", False)),
         "model_path": params.get("model_path") or getattr(shared.opts, "ideogram4_model_path", ""),
         "quantization": params.get("quantization") or getattr(shared.opts, "ideogram4_quantization", "nf4"),
     }
@@ -87,6 +88,7 @@ def _build_infotext(p, caption, negative, seed, params, width, height) -> str:
         "Ideogram mu": params["mu"],
         "Ideogram std": params["std"],
         "Ideogram transparent": "true" if params["transparent"] else None,
+        "Ideogram offline": "true" if params["offline_mode"] else None,
         "Ideogram quant": params["quantization"],
         **(getattr(p, "extra_generation_params", None) or {}),
     }
@@ -139,7 +141,7 @@ def process_images_ideogram4(p):
     p.sd_vae_hash = None
 
     # ---- load pipeline (raises Ideogram4Error → shown in the UI) --------------
-    pipe = ig_pipeline.get_pipeline(params["model_path"], params["quantization"])
+    pipe = ig_pipeline.get_pipeline(params["model_path"], params["quantization"], offline_mode=params["offline_mode"])
 
     state.job_count = n_images
     state.job_no = 0

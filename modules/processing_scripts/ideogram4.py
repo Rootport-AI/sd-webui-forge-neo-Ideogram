@@ -185,6 +185,9 @@ class ScriptIdeogram4(scripts.ScriptBuiltinUI):
                 transparent = self._reg("transparent", gr.Checkbox(
                     label="Transparent background", value=False,
                     elem_id=eid("ideogram4_transparent")))
+                offline_mode = self._reg("offline_mode", gr.Checkbox(
+                    label="Offline mode", value=False, elem_id=eid("ideogram4_offline"),
+                    info="Use cached Ideogram 4.0 weights only. Enable this after the first successful online generation/download."))
                 resolution_preset = self._reg("resolution_preset", gr.Dropdown(
                     label="Resolution Preset", choices=list(RESOLUTION_PRESETS.keys()),
                     value="Custom", elem_id=eid("ideogram4_resolution")))
@@ -237,6 +240,7 @@ class ScriptIdeogram4(scripts.ScriptBuiltinUI):
             (mu, "Ideogram mu"),
             (std, "Ideogram std"),
             (transparent, "Ideogram transparent"),
+            (offline_mode, "Ideogram offline"),
         ]
 
         return list(self.field_components)
@@ -329,6 +333,7 @@ class ScriptIdeogram4(scripts.ScriptBuiltinUI):
             "mu": mu,
             "std": std,
             "transparent": bool(d.get("transparent")),
+            "offline_mode": bool(d.get("offline_mode")),
             "model_path": getattr(shared.opts, "ideogram4_model_path", ""),
             "quantization": getattr(shared.opts, "ideogram4_quantization", "nf4"),
         }
