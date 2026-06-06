@@ -28,9 +28,10 @@ def _import_pipeline_class():
     """Locate the Ideogram4Pipeline class from diffusers or the ideogram4 package."""
     errors = []
     for module, attr in (
-        ("diffusers", "Ideogram4Pipeline"),
         ("ideogram4", "Ideogram4Pipeline"),
+        ("ideogram4.pipeline_ideogram4", "Ideogram4Pipeline"),
         ("ideogram4.pipeline", "Ideogram4Pipeline"),
+        ("diffusers", "Ideogram4Pipeline"),
     ):
         try:
             mod = __import__(module, fromlist=[attr])
@@ -40,8 +41,10 @@ def _import_pipeline_class():
 
     raise Ideogram4Error(
         "Could not import Ideogram4Pipeline. Install the official inference code "
-        "(`pip install ideogram4`, github.com/ideogram-oss/ideogram4) or a diffusers "
-        "build that ships Ideogram4Pipeline.\nTried:\n  " + "\n  ".join(errors)
+        "(not on PyPI yet):\n"
+        "  pip install git+https://github.com/ideogram-oss/ideogram4.git\n"
+        "or a diffusers build that ships Ideogram4Pipeline.\nTried:\n  "
+        + "\n  ".join(errors)
     )
 
 

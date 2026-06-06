@@ -10,4 +10,4 @@ set COMMANDLINE_ARGS=
 :: --pin-shared-memory --cuda-malloc --cuda-stream
 :: --skip-python-version-check --skip-torch-cuda-test --skip-version-check --skip-prepare-environment --skip-install
 
-call webui.bat
+call "%~dp0webui.bat" %COMMANDLINE_ARGS% %*

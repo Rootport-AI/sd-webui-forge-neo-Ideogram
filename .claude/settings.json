@@ -10,7 +10,9 @@
       "Bash(python -c \"import gradio; print\\('gradio', gradio.__version__\\)\")",
       "Bash(python -m py_compile modules/processing_scripts/ideogram4.py modules_forge/main_entry.py modules/ideogram4/ui_state.py)",
       "Bash(python -m py_compile modules/ideogram4/*.py modules/processing_scripts/ideogram4.py modules_forge/presets.py modules_forge/shared_options.py modules_forge/main_entry.py modules/processing.py)",
-      "Bash(rm _ideogram4_selftest.py)"
+      "Bash(rm _ideogram4_selftest.py)",
+      "Bash(python -m py_compile modules/ideogram4/pipeline.py)",
+      "Bash(python -c ' *)"
     ]
   }
 }
