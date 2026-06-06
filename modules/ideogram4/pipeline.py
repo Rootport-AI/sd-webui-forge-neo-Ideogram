@@ -57,11 +57,30 @@ def _cuda_available() -> bool:
         return False
 
 
-def _looks_like_local_path(model_path: str) -> bool:
-    return os.path.exists(model_path)
+def _import_config_class():
+    """Locate Ideogram4PipelineConfig from the official ideogram4 package (or None)."""
+    for module in ("ideogram4", "ideogram4.pipeline_ideogram4", "ideogram4.pipeline"):
+        try:
+            mod = __import__(module, fromlist=["Ideogram4PipelineConfig"])
+        except Exception:
+            continue
+        cls = getattr(mod, "Ideogram4PipelineConfig", None)
+        if cls is not None:
+            return cls
+    return None
 
 
-def _hf_token() -> str | None:
+# Used when no explicit model path is given: pick the gated repo per quantization,
+# mirroring the official run_inference.py QUANTIZATION_REPOS mapping.
+DEFAULT_REPOS = {
+    "nf4": "ideogram-ai/ideogram-4-nf4",
+    "fp8": "ideogram-ai/ideogram-4-fp8",
+}
+
+
+def _apply_hf_token():
+    """Export the configured HF token to the environment so huggingface_hub picks it
+    up — the official from_pretrained() has no token argument."""
     token = None
     try:
         from modules import shared
@@ -69,77 +88,64 @@ def _hf_token() -> str | None:
         token = getattr(shared.opts, "ideogram4_hf_token", None)
     except Exception:
         pass
-    return token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    token = token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if token:
+        os.environ.setdefault("HF_TOKEN", token)
+        os.environ.setdefault("HUGGING_FACE_HUB_TOKEN", token)
 
 
 def get_pipeline(model_path: str, quantization: str = "nf4"):
-    """Load (and cache) the Ideogram4Pipeline for ``(model_path, quantization)``.
+    """Load (and cache) the Ideogram4Pipeline.
 
-    ``model_path`` is a local diffusers folder (default) or a Hugging Face repo id.
-    Raises ``Ideogram4Error`` with an actionable message on misconfiguration.
+    ``model_path`` is a Hugging Face repo id (e.g. ``ideogram-ai/ideogram-4-nf4``)
+    or anything the official loader accepts as ``weights_repo``; if empty it
+    defaults to the gated repo for the chosen ``quantization`` (nf4 / fp8).
+
+    The official ``Ideogram4Pipeline.from_pretrained`` is keyword-only and takes a
+    ``config=Ideogram4PipelineConfig(weights_repo=...)`` plus ``device`` / ``dtype``
+    (NOT a diffusers-style positional path). Raises ``Ideogram4Error`` with an
+    actionable message on misconfiguration.
     """
-    if not model_path:
-        raise Ideogram4Error(
-            "Ideogram 4.0 model path is not set. Point Settings → 'Ideogram 4.0' → "
-            "'Model path' at a local diffusers folder (or a Hugging Face repo id)."
-        )
-
     quantization = (quantization or "nf4").lower()
-    cache_key = (model_path, quantization)
+    weights_repo = model_path or DEFAULT_REPOS.get(quantization, DEFAULT_REPOS["nf4"])
+
+    cache_key = (weights_repo, quantization)
     if cache_key in _PIPELINE_CACHE:
         return _PIPELINE_CACHE[cache_key]
 
-    is_local = _looks_like_local_path(model_path)
-    if not is_local and "/" not in model_path:
+    if not _cuda_available():
         raise Ideogram4Error(
-            f'Ideogram 4.0 model path "{model_path}" is neither an existing folder nor a '
-            "Hugging Face repo id (expected e.g. 'ideogram-ai/ideogram-4-nf4')."
-        )
-
-    if quantization == "nf4" and not _cuda_available():
-        raise Ideogram4Error(
-            "The nf4 weights require CUDA, which is not available here. Use a CUDA GPU, "
-            "or switch quantization to fp8 (which needs the official non-diffusers loader)."
-        )
-    if quantization == "fp8":
-        raise Ideogram4Error(
-            "fp8 weights are not Diffusers-compatible, so they cannot be loaded through "
-            "Ideogram4Pipeline. Use the nf4 weights, or run the official fp8 inference path."
+            "Ideogram 4.0 requires a CUDA GPU, which is not available here. "
+            "Run on a machine with an NVIDIA GPU (both nf4 and fp8 weights need CUDA)."
         )
 
     PipelineClass = _import_pipeline_class()
+    ConfigClass = _import_config_class()
+    _apply_hf_token()
 
-    from_pretrained_kwargs = {}
-    if not is_local:
-        token = _hf_token()
-        if token:
-            from_pretrained_kwargs["token"] = token
+    import torch
 
-    logger.info("Loading Ideogram 4.0 pipeline from %s (%s)", model_path, quantization)
+    logger.info("Loading Ideogram 4.0 pipeline from %s (%s)", weights_repo, quantization)
     try:
-        pipe = PipelineClass.from_pretrained(model_path, **from_pretrained_kwargs)
-    except TypeError:
-        # older diffusers used `use_auth_token` instead of `token`
-        if "token" in from_pretrained_kwargs:
-            from_pretrained_kwargs["use_auth_token"] = from_pretrained_kwargs.pop("token")
-            pipe = PipelineClass.from_pretrained(model_path, **from_pretrained_kwargs)
+        if ConfigClass is not None:
+            config = ConfigClass(weights_repo=weights_repo)
+            pipe = PipelineClass.from_pretrained(config=config, device="cuda", dtype=torch.bfloat16)
         else:
-            raise
+            # Fallback for a diffusers-style Ideogram4Pipeline (positional repo/path).
+            pipe = PipelineClass.from_pretrained(weights_repo)
+            if hasattr(pipe, "to"):
+                pipe = pipe.to("cuda")
+    except Ideogram4Error:
+        raise
     except Exception as e:
-        name = type(e).__name__
-        if "Gated" in name or "401" in str(e) or "403" in str(e):
+        msg = str(e)
+        if "Gated" in type(e).__name__ or "gated" in msg.lower() or "401" in msg or "403" in msg:
             raise Ideogram4Error(
                 "Access to the Ideogram 4.0 weights was denied. Accept the license at "
-                "https://huggingface.co/ideogram-ai/ideogram-4-nf4 and set an HF token "
+                f"https://huggingface.co/{weights_repo} and set an HF token "
                 "(Settings → 'Ideogram 4.0' → 'HF token', or the HF_TOKEN env var)."
             ) from e
         raise
-
-    if _cuda_available():
-        try:
-            pipe = pipe.to("cuda")
-        except Exception:
-            logger.warning("Could not move Ideogram 4.0 pipeline to CUDA", exc_info=True)
 
     _PIPELINE_CACHE[cache_key] = pipe
     return pipe
@@ -211,6 +217,9 @@ def call_pipeline(
         (("negative_prompt",), negative_prompt),
         (("transparent", "transparent_background"), True if transparent else None),
         (("num_images_per_prompt", "num_images"), num_images),
+        # official pipeline runs its own caption verifier and raises by default;
+        # we surface warnings ourselves (spec §4.5), so never let it block generation
+        (("raise_on_caption_issues",), False),
     ]
 
     kwargs = {}

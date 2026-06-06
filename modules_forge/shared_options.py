@@ -18,9 +18,9 @@ def register(options_templates, options_section, OptionInfo):
         options_section(
             ("ideogram4", "Ideogram 4.0"),
             {
-                "ideogram4_model_path": OptionInfo("", "Model path").info("local diffusers folder for Ideogram 4.0 (or a Hugging Face repo id such as ideogram-ai/ideogram-4-nf4)"),
-                "ideogram4_quantization": OptionInfo("nf4", "Quantization", gr.Radio, {"choices": ["nf4", "fp8"]}).info("nf4 requires CUDA and is Diffusers-compatible; fp8 needs the official non-diffusers loader"),
-                "ideogram4_hf_token": OptionInfo("", "HF token").info("only needed when loading gated weights by repo id; falls back to the HF_TOKEN environment variable"),
+                "ideogram4_model_path": OptionInfo("", "Model path / weights repo").info("Hugging Face repo id (e.g. ideogram-ai/ideogram-4-nf4) or any 'weights_repo' the official loader accepts; leave empty to use the gated repo for the chosen quantization"),
+                "ideogram4_quantization": OptionInfo("nf4", "Quantization", gr.Radio, {"choices": ["nf4", "fp8"]}).info("used to pick the default weights repo when 'Model path' is empty; both need a CUDA GPU and the official ideogram4 package"),
+                "ideogram4_hf_token": OptionInfo("", "HF token").info("for gated weights; exported to the HF_TOKEN environment variable for huggingface_hub (the official loader takes no token argument)"),
             },
         )
     )
