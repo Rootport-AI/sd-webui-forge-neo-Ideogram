@@ -11,6 +11,7 @@ signature and only passes keyword arguments the pipeline actually accepts —
 unknown args are dropped (with a debug log) rather than crashing generation.
 """
 
+import contextlib
 import inspect
 import logging
 import os
@@ -98,14 +99,33 @@ def _apply_hf_token():
         os.environ["HUGGING_FACE_HUB_TOKEN"] = settings_token
 
 
-def _apply_offline_mode():
-    """Force huggingface_hub / transformers into offline mode (cache-only).
+@contextlib.contextmanager
+def _offline_env(enabled: bool):
+    """Temporarily force HF / transformers offline for the duration of the load, then
+    restore the previous environment.
 
-    We only ever SET these — never clear them — so a user who enabled offline mode
-    via external environment variables is not overridden when the checkbox is off.
+    Only touches the environment when ``enabled`` (i.e. the UI checkbox). Any value
+    that was already present (e.g. set externally by the user) is saved and restored,
+    so unchecking the box never leaves a stale offline state behind — fixing the bug
+    where a failed offline run kept failing after the box was turned off.
     """
-    os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    if not enabled:
+        yield
+        return
+
+    keys = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
+    previous = {k: os.environ.get(k) for k in keys}
+    try:
+        for k in keys:
+            os.environ[k] = "1"
+        yield
+    finally:
+        for k in keys:
+            old = previous[k]
+            if old is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = old
 
 
 def get_pipeline(model_path: str, quantization: str = "nf4", offline_mode: bool = False):
@@ -141,21 +161,20 @@ def get_pipeline(model_path: str, quantization: str = "nf4", offline_mode: bool 
     PipelineClass = _import_pipeline_class()
     ConfigClass = _import_config_class()
     _apply_hf_token()
-    if offline_mode:
-        _apply_offline_mode()
 
     import torch
 
     logger.info("Loading Ideogram 4.0 pipeline from %s (%s, offline=%s)", weights_repo, quantization, offline_mode)
     try:
-        if ConfigClass is not None:
-            config = ConfigClass(weights_repo=weights_repo)
-            pipe = PipelineClass.from_pretrained(config=config, device="cuda", dtype=torch.bfloat16)
-        else:
-            # Fallback for a diffusers-style Ideogram4Pipeline (positional repo/path).
-            pipe = PipelineClass.from_pretrained(weights_repo)
-            if hasattr(pipe, "to"):
-                pipe = pipe.to("cuda")
+        with _offline_env(offline_mode):
+            if ConfigClass is not None:
+                config = ConfigClass(weights_repo=weights_repo)
+                pipe = PipelineClass.from_pretrained(config=config, device="cuda", dtype=torch.bfloat16)
+            else:
+                # Fallback for a diffusers-style Ideogram4Pipeline (positional repo/path).
+                pipe = PipelineClass.from_pretrained(weights_repo)
+                if hasattr(pipe, "to"):
+                    pipe = pipe.to("cuda")
     except Ideogram4Error:
         raise
     except Exception as e:
