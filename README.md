@@ -42,7 +42,7 @@ Plain-text mode が「off」になると、通常の Prompt / Negative Prompt �
 >
 > There is a bug where even very ordinary prompts can trigger the safety filter, resulting in an “Image blocked by safety filter” error. This is an internal bug in the Ideogram 4.0 model, so it cannot be resolved by the user. It is better to keep Plain-text mode “off”.
 
-When Plain-text mode is set to “off,” standard Prompts and Negative Prompts will no longer be loaded. Instead, you can specify detailed prompts in the fields starting with “High-level description” at the bottom of the UI. Since this is quite complex, we recommend having an AI like ChatGPT or Claude generate the JSON file for Ideogram 4.0. You can import it by dragging and dropping it into the “Import JSON caption file” section.
+When Plain-text mode is set to “off,” standard Prompts and Negative Prompts will no longer be loaded. Instead, you can specify detailed prompts in the fields starting with “High-level description” at the bottom of the UI. Since this is quite complex, I recommend having an AI like ChatGPT or Claude generate the JSON file for Ideogram 4.0. You can import it by dragging and dropping it into the “Import JSON caption file” section.
 
 ---  
 
