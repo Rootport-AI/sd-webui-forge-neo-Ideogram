@@ -25,6 +25,16 @@ class Ideogram4Error(RuntimeError):
     """Raised for user-actionable problems (missing package, weights, token, HW)."""
 
 
+# Shared guidance for "the startup runtime preflight didn't finish" situations.
+_PREFLIGHT_HINT = (
+    "Ideogram 4.0 startup preflight did not complete — check the [Ideogram4/runtime] lines "
+    "in the startup log. In some environments pip is missing from the venv (recreate it with "
+    "`uv venv venv --python 3.13 --seed`, then fully restart). Note: Settings -> Reload UI is "
+    "not enough — Python packages are imported once per process, so a FULL restart from "
+    "webui-user.bat / webui.bat is required after the preset is set to 'ideogram4'."
+)
+
+
 def _import_pipeline_class():
     """Locate the Ideogram4Pipeline class from diffusers or the ideogram4 package."""
     errors = []
@@ -44,17 +54,11 @@ def _import_pipeline_class():
 
     # A missing runtime dependency (e.g. bitsandbytes for nf4) shows up here as the
     # underlying ImportError while importing the ideogram4 package — give it specific help.
-    preflight_hint = (
-        "Ideogram 4.0 startup preflight did not complete — check the [Ideogram4/runtime] lines "
-        "in the startup log. In some environments pip is missing from the venv (recreate it with "
-        "`uv venv venv --python 3.13 --seed`, then fully restart)."
-    )
-
     if "bitsandbytes" in joined:
         raise Ideogram4Error(
             "Could not import Ideogram4Pipeline because the Ideogram 4.0 runtime dependency "
             "'bitsandbytes' (needed for nf4) is missing or broken.\n"
-            f"{preflight_hint}\n"
+            f"{_PREFLIGHT_HINT}\n"
             "Or install it manually in this venv and fully restart:\n"
             "  python -m pip install --no-deps bitsandbytes==0.49.2\n"
             "Tried:\n  " + joined
@@ -63,7 +67,7 @@ def _import_pipeline_class():
     raise Ideogram4Error(
         "Could not import Ideogram4Pipeline. A required Ideogram 4.0 runtime package is "
         "missing or broken.\n"
-        f"{preflight_hint}\n"
+        f"{_PREFLIGHT_HINT}\n"
         "Or install it manually then fully restart:\n"
         "  python -m pip install --no-deps git+https://github.com/ideogram-oss/ideogram4.git\n"
         "Tried:\n  " + joined
@@ -322,10 +326,7 @@ def _check_transformers_for_ideogram4():
             "Ideogram 4.0 requires Transformers 4.57.1 or newer because its text encoder "
             "uses Qwen3-VL.\n"
             f"This Forge Neo process is currently running Transformers {ver}.\n\n"
-            "Please select the Ideogram4 UI preset, then fully restart Forge Neo from "
-            "webui-user.bat/webui.bat.\n"
-            "Settings -> Reload UI is not enough because Python packages are already "
-            "imported in the current process."
+            + _PREFLIGHT_HINT
         )
 
 
