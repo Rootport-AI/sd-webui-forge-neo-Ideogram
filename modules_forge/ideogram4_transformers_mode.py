@@ -1,23 +1,22 @@
-"""Startup-time Transformers version switch for the Ideogram 4.0 UI preset.
+"""Startup runtime-dependency preflight for the Ideogram 4.0 UI preset.
 
-Ideogram 4.0's text encoder is Qwen3-VL, which is only recognized by Transformers
->= 4.57.x, whereas the rest of Forge Neo targets ``transformers==4.56.2``. Instead
-of upgrading the whole stack (which could affect SDXL / Anima / Flux / Qwen-Image),
-we switch Transformers ONLY at process start, based on the saved ``forge_preset``
-in ``config.json``:
+Ideogram 4.0 needs a specific set of Python packages that the rest of Forge Neo does
+not (Qwen3-VL support from a newer Transformers, bitsandbytes for the nf4 weights, and
+the official ``ideogram4`` inference code which is not on PyPI). Rather than upgrading
+the whole stack — which could affect SDXL / Anima / Flux / Qwen-Image — these are
+checked (and, if missing, installed into the current venv) ONLY at process start and
+ONLY when the saved ``forge_preset`` is ``ideogram4``.
 
-    forge_preset == "ideogram4"  ->  transformers==4.57.6
-    otherwise                    ->  transformers==4.56.2
+Scope: Python packages only. Model weights / text encoder / VAE / tokenizer / HF
+license-gate / HF token remain the loader's responsibility at generation time
+(``modules/ideogram4/pipeline.py``). This split keeps "dependency missing" and "model
+download failed" as clearly separate, separately-logged problems.
 
-Python cannot safely swap an already-imported package in-process, and Settings ->
-Reload UI reuses the same process, so this MUST run before ``transformers`` is first
-imported — it is invoked from ``launch.py`` after ``prepare_environment()`` and just
-before ``start()``. Changing the preset therefore needs a FULL restart of Forge Neo
-(from webui-user.bat / webui.bat), not Reload UI.
-
-Deliberately lightweight: it imports only json / os / subprocess / sys / time /
-importlib.metadata (+ launch_utils for run_pip). It never imports transformers,
-torch, gradio, modules.shared, or modules.ideogram4.
+Must run before transformers / torch are imported into the main process (called from
+``launch.py`` after ``prepare_environment()`` and before ``start()``); switching the
+preset therefore needs a FULL restart, not Settings -> Reload UI. All verification is
+done in subprocesses so this module never imports torch / transformers / bitsandbytes /
+ideogram4 into the main process.
 """
 
 import json
@@ -26,25 +25,58 @@ import subprocess
 import sys
 import time
 
-STANDARD_VERSION = "4.56.2"
-IDEOGRAM4_VERSION = "4.57.6"
-MIN_IDEOGRAM4_VERSION = "4.57.1"
+STANDARD_TRANSFORMERS = "4.56.2"
+IDEOGRAM4_TRANSFORMERS = "4.57.6"
+IDEOGRAM4_PACKAGE_SPEC = "git+https://github.com/ideogram-oss/ideogram4.git"
 
-_PREFIX = "[Ideogram4/transformers]"
-_LOCK_STALE_SECONDS = 600
+LOG_TRANSFORMERS = "[Ideogram4/transformers]"
+LOG_RUNTIME = "[Ideogram4/runtime]"
+
+PREFLIGHT_LOCK = "ideogram4_runtime_preflight.lock"
+_LOCK_STALE_SECONDS = 1800
+
+# subprocess verification snippets (run with `python -c`)
+_VERIFY_IDEOGRAM4_TRANSFORMERS = (
+    "import transformers, transformers.models.qwen3_vl\n"
+    "from transformers.masking_utils import create_causal_mask\n"
+)
+_VERIFY_STANDARD_TRANSFORMERS = (
+    "import transformers\n"
+    "from transformers.modeling_utils import no_init_weights\n"
+)
+_VERIFY_BITSANDBYTES = "import bitsandbytes, bitsandbytes.nn\n"
+_VERIFY_IDEOGRAM4 = "from ideogram4 import Ideogram4Pipeline\n"
+_VERIFY_BASE = "import accelerate, diffusers, huggingface_hub, safetensors\n"
+
+# Ordered: transformers must be in place before bitsandbytes, and both before the
+# ideogram4 import-check (importing Ideogram4Pipeline pulls transformers + bitsandbytes).
+IDEOGRAM4_RUNTIME_REQUIREMENTS = [
+    {
+        "name": "transformers",
+        "pip_spec": f"transformers=={IDEOGRAM4_TRANSFORMERS}",
+        "install_args": "--no-deps",
+        "verify": _VERIFY_IDEOGRAM4_TRANSFORMERS,
+        "log_prefix": LOG_TRANSFORMERS,
+    },
+    {
+        "name": "bitsandbytes",
+        "pip_spec": "bitsandbytes==0.49.2",
+        "install_args": "--no-deps",
+        "verify": _VERIFY_BITSANDBYTES,
+        "log_prefix": LOG_RUNTIME,
+    },
+    {
+        "name": "ideogram4",
+        "pip_spec": IDEOGRAM4_PACKAGE_SPEC,
+        "install_args": "--no-deps",
+        "verify": _VERIFY_IDEOGRAM4,
+        "log_prefix": LOG_RUNTIME,
+    },
+]
 
 
-def _log(msg: str):
-    print(f"{_PREFIX} {msg}")
-
-
-def _installed_version():
-    import importlib.metadata
-
-    try:
-        return importlib.metadata.version("transformers")
-    except importlib.metadata.PackageNotFoundError:
-        return None
+def _log(prefix: str, msg: str):
+    print(f"{prefix} {msg}")
 
 
 def _read_preset(settings_file: str):
@@ -54,30 +86,62 @@ def _read_preset(settings_file: str):
     except FileNotFoundError:
         return None
     except Exception as e:
-        _log(f"could not read settings file {settings_file!r}: {e}")
+        _log(LOG_RUNTIME, f"could not read settings file {settings_file!r}: {e}")
         return None
 
 
-def _lock_path() -> str:
+def _installed_version(package: str):
+    import importlib.metadata
+
+    try:
+        return importlib.metadata.version(package)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _verify(code: str):
+    """Run a verification snippet in a fresh subprocess. Returns (ok, stderr)."""
+    try:
+        result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    except Exception as e:
+        return False, str(e)
+    return result.returncode == 0, (result.stderr or "").strip()
+
+
+def _pip_install(req) -> bool:
+    from modules import launch_utils
+
+    try:
+        launch_utils.run_pip(
+            f"install {req['install_args']} {req['pip_spec']}",
+            f"{req['name']} (Ideogram 4.0 runtime)",
+        )
+        return True
+    except Exception as e:
+        _log(req.get("log_prefix", LOG_RUNTIME), f"pip install failed for {req['name']}: {e}")
+        return False
+
+
+# ---- lock -----------------------------------------------------------------
+def _lock_path(name: str) -> str:
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     tmp = os.path.join(root, "tmp")
     try:
         os.makedirs(tmp, exist_ok=True)
     except OSError:
         pass
-    return os.path.join(tmp, "ideogram4_transformers_switch.lock")
+    return os.path.join(tmp, name)
 
 
-def _acquire_lock():
-    """Return ``(proceed, path)``. ``path`` is set only when we own the lock file."""
-    path = _lock_path()
+def _acquire_lock(name: str):
+    """Return ``(proceed, path)``; ``path`` is set only when we own the lock file."""
+    path = _lock_path(name)
     try:
         if os.path.exists(path) and (time.time() - os.path.getmtime(path)) > _LOCK_STALE_SECONDS:
-            _log("removing stale switch lock")
+            _log(LOG_RUNTIME, "removing stale preflight lock")
             os.remove(path)
     except OSError:
         pass
-
     try:
         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         os.write(fd, str(os.getpid()).encode())
@@ -86,7 +150,7 @@ def _acquire_lock():
     except FileExistsError:
         return False, None
     except OSError as e:
-        _log(f"could not create lock ({e}); proceeding without it")
+        _log(LOG_RUNTIME, f"could not create lock ({e}); proceeding without it")
         return True, None
 
 
@@ -98,169 +162,112 @@ def _release_lock(path):
             pass
 
 
-def _pip_switch(version: str) -> bool:
-    from modules import launch_utils
+# ---- per-requirement handling --------------------------------------------
+def _ensure_requirement(req, skip_install: bool) -> bool:
+    prefix = req.get("log_prefix", LOG_RUNTIME)
+    manual = f"python -m pip install {req['install_args']} {req['pip_spec']}"
 
-    try:
-        # --no-deps: only move Transformers itself (tokenizers / huggingface-hub already
-        # satisfy 4.57.6); run_pip adds --prefer-binary, honours INDEX_URL and --uv.
-        launch_utils.run_pip(
-            f"install --no-deps transformers=={version}",
-            f"transformers=={version} (Ideogram 4.0 mode switch)",
-        )
+    ok, _ = _verify(req["verify"])
+    if ok:
+        _log(prefix, f"{req['name']} already available")
         return True
-    except Exception as e:
-        _log(f"pip switch to transformers=={version} failed: {e}")
+
+    if skip_install:
+        _log(prefix, f"--skip-install is set: missing {req['name']}. Ideogram 4.0 generation will fail until you install it manually:\n    {manual}")
         return False
 
-
-def _verify(ideogram: bool) -> bool:
-    """Verify the switched Transformers in a SEPARATE process (never import it here)."""
-    if ideogram:
-        code = (
-            "import transformers, transformers.models.qwen3_vl\n"
-            "from transformers.masking_utils import create_causal_mask\n"
-            "print(transformers.__version__)\n"
-        )
-    else:
-        code = (
-            "import transformers\n"
-            "from transformers.modeling_utils import no_init_weights\n"
-            "print(transformers.__version__)\n"
-        )
-    try:
-        result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
-    except Exception as e:
-        _log(f"verification subprocess error: {e}")
+    _log(prefix, f"installing {req['name']} ({req['pip_spec']}) ...")
+    if not _pip_install(req):
+        _log(prefix, f"could not install {req['name']} — check network / proxy / git / --skip-install, or install manually:\n    {manual}")
         return False
-    if result.returncode != 0:
-        _log("verification failed:\n" + (result.stderr or "").strip())
-        return False
-    _log(f"verified transformers {(result.stdout or '').strip()}")
-    return True
-
-
-def _on_failure(ideogram: bool, target: str, current):
-    if ideogram:
-        _log(
-            f"FAILED to switch to transformers=={target} (current {current}). Ideogram 4.0 "
-            "generation will be blocked by the runtime check. Verify: internet connection, pip "
-            "cache, that --skip-install is not set, and antivirus file locks; then fully restart."
-        )
-    else:
-        _log(
-            f"FAILED to revert to transformers=={target} (current {current}). Continuing startup "
-            "with the current version; if existing models misbehave, fully restart or repair the "
-            "environment manually."
-        )
-
-
-def ensure_ideogram4_transformers_mode():
-    """Switch Transformers to match the saved UI preset, before transformers is imported."""
-    try:
-        _ensure()
-    except Exception as e:
-        _log(f"unexpected error during transformers mode check: {e!r}; continuing startup")
-
-
-def _ensure():
-    from modules import launch_utils
-
-    args = launch_utils.args
-    preset = _read_preset(args.ui_settings_file)
-    want_ideogram = preset == "ideogram4"
-    target = IDEOGRAM4_VERSION if want_ideogram else STANDARD_VERSION
-    current = _installed_version()
-
-    if current == target:
-        _log(f"transformers=={current} already matches preset {preset!r}")
-        return
-
-    _log(f"preset {preset!r} wants transformers=={target}, found {current}")
-
-    if args.skip_install:
-        _log(
-            f"--skip-install is set: NOT switching transformers (Ideogram 4.0 needs "
-            f">= {MIN_IDEOGRAM4_VERSION}). The runtime check will stop generation if incompatible."
-        )
-        return
-
-    proceed, lock_path = _acquire_lock()
-    if not proceed:
-        _log("another process is switching transformers; skipping")
-        return
-
-    try:
-        current = _installed_version()  # re-check under the lock
-        if current == target:
-            _log(f"transformers=={current} already matches after lock; nothing to do")
-            return
-
-        if not _pip_switch(target):
-            _on_failure(want_ideogram, target, current)
-            return
-
-        if not _verify(want_ideogram):
-            _on_failure(want_ideogram, target, _installed_version())
-            return
-
-        _log(f"switched transformers to {target} for preset {preset!r}")
-    finally:
-        _release_lock(lock_path)
-
-
-IDEOGRAM4_PACKAGE_SPEC = "git+https://github.com/ideogram-oss/ideogram4.git"
-
-
-def _ideogram4_package_installed() -> bool:
-    import importlib.util
-
-    try:
-        return importlib.util.find_spec("ideogram4") is not None
-    except Exception:
-        return False
-
-
-def ensure_ideogram4_package():
-    """Install the official 'ideogram4' inference package when the preset needs it.
-
-    Mirrors the transformers switch: only for the ideogram4 preset, only if missing,
-    skipped under --skip-install, never blocks startup on failure (the generation-time
-    import gives a friendly error as the backstop). Uses --no-deps so it can't disturb
-    the carefully-pinned transformers / torch / diffusers stack.
-    """
-    try:
-        _ensure_package()
-    except Exception as e:
-        _log(f"unexpected error during ideogram4 package check: {e!r}; continuing startup")
-
-
-def _ensure_package():
-    from modules import launch_utils
-
-    args = launch_utils.args
-    if _read_preset(args.ui_settings_file) != "ideogram4":
-        return
-
-    if _ideogram4_package_installed():
-        return
-
-    _log("official 'ideogram4' inference package is not installed")
-    if args.skip_install:
-        _log(f"--skip-install is set: NOT installing it. Run `pip install --no-deps {IDEOGRAM4_PACKAGE_SPEC}` manually.")
-        return
-
-    _log(f"installing ideogram4 from GitHub (one-time): {IDEOGRAM4_PACKAGE_SPEC}")
-    try:
-        launch_utils.run_pip(f"install --no-deps {IDEOGRAM4_PACKAGE_SPEC}", "ideogram4 (official inference code)")
-    except Exception as e:
-        _log(f"failed to install ideogram4: {e}. Install it manually with `pip install --no-deps {IDEOGRAM4_PACKAGE_SPEC}`")
-        return
 
     import importlib
 
     importlib.invalidate_caches()
-    if _ideogram4_package_installed():
-        _log("ideogram4 installed")
+    ok2, err = _verify(req["verify"])
+    if ok2:
+        _log(prefix, f"{req['name']} installed and verified")
     else:
-        _log("ideogram4 install did not register; a full restart may be required")
+        _log(prefix, f"{req['name']} installed but verification failed (generation may error):\n{err}")
+    return ok2
+
+
+def _final_verify():
+    ok, err = _verify(_VERIFY_IDEOGRAM4_TRANSFORMERS + _VERIFY_BITSANDBYTES + _VERIFY_IDEOGRAM4)
+    if ok:
+        _log(LOG_RUNTIME, "all Ideogram 4.0 runtime dependencies verified")
+    else:
+        _log(LOG_RUNTIME, f"runtime dependency verification still failing (generation may error):\n{err}")
+
+    base_ok, base_err = _verify(_VERIFY_BASE)
+    if not base_ok:
+        _log(LOG_RUNTIME, f"Forge Neo base requirements look missing/broken (accelerate / diffusers / huggingface_hub / safetensors); the base environment install may have failed:\n{base_err}")
+
+
+def _revert_transformers_to_standard(args):
+    """Non-ideogram4 presets run on the standard transformers; revert if needed."""
+    current = _installed_version("transformers")
+    if current == STANDARD_TRANSFORMERS:
+        return
+
+    _log(LOG_TRANSFORMERS, f"preset is not ideogram4; transformers is {current}, restoring {STANDARD_TRANSFORMERS}")
+    if args.skip_install:
+        _log(LOG_TRANSFORMERS, f"--skip-install is set: not reverting (current {current})")
+        return
+
+    proceed, lock_path = _acquire_lock(PREFLIGHT_LOCK)
+    if not proceed:
+        _log(LOG_TRANSFORMERS, "another process is updating dependencies; skipping revert")
+        return
+    try:
+        if _installed_version("transformers") == STANDARD_TRANSFORMERS:
+            return
+        if not _pip_install({"name": "transformers", "pip_spec": f"transformers=={STANDARD_TRANSFORMERS}", "install_args": "--no-deps", "log_prefix": LOG_TRANSFORMERS}):
+            _log(LOG_TRANSFORMERS, f"failed to restore transformers=={STANDARD_TRANSFORMERS}; continuing with {current}")
+            return
+        ok, err = _verify(_VERIFY_STANDARD_TRANSFORMERS)
+        if ok:
+            _log(LOG_TRANSFORMERS, f"restored transformers {STANDARD_TRANSFORMERS}")
+        else:
+            _log(LOG_TRANSFORMERS, f"revert verification failed; continuing:\n{err}")
+    finally:
+        _release_lock(lock_path)
+
+
+# ---- entry point ----------------------------------------------------------
+def ensure_ideogram4_runtime():
+    """Preflight Ideogram 4.0 Python dependencies (or revert transformers for others)."""
+    try:
+        _run_preflight()
+    except Exception as e:
+        _log(LOG_RUNTIME, f"unexpected error during preflight: {e!r}; continuing startup")
+
+
+def _run_preflight():
+    from modules import launch_utils
+
+    args = launch_utils.args
+    preset = _read_preset(args.ui_settings_file)
+
+    if preset != "ideogram4":
+        _revert_transformers_to_standard(args)
+        return
+
+    proceed, lock_path = _acquire_lock(PREFLIGHT_LOCK)
+    if not proceed:
+        _log(LOG_RUNTIME, "another process is running the Ideogram 4.0 preflight; skipping")
+        return
+    try:
+        for req in IDEOGRAM4_RUNTIME_REQUIREMENTS:
+            _ensure_requirement(req, args.skip_install)
+        _final_verify()
+    finally:
+        _release_lock(lock_path)
+
+
+# Backwards-compatible aliases (older launch.py / external callers).
+ensure_ideogram4_transformers_mode = ensure_ideogram4_runtime
+
+
+def ensure_ideogram4_package():
+    """Deprecated: folded into ensure_ideogram4_runtime(); kept as a no-op shim."""

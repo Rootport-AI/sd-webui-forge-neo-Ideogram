@@ -40,14 +40,28 @@ def _import_pipeline_class():
         except Exception as e:  # ImportError or AttributeError
             errors.append(f"{module}.{attr}: {e}")
 
+    joined = "\n  ".join(errors)
+
+    # A missing runtime dependency (e.g. bitsandbytes for nf4) shows up here as the
+    # underlying ImportError while importing the ideogram4 package — give it specific help.
+    if "bitsandbytes" in joined:
+        raise Ideogram4Error(
+            "Could not import Ideogram4Pipeline because the Ideogram 4.0 runtime dependency "
+            "'bitsandbytes' (needed for nf4) is missing or broken.\n"
+            "Restart Forge Neo with the 'ideogram4' preset to let startup install it, or "
+            "install it manually in this venv and fully restart:\n"
+            "  python -m pip install --no-deps bitsandbytes==0.49.2\n"
+            "Tried:\n  " + joined
+        )
+
     raise Ideogram4Error(
-        "Could not import Ideogram4Pipeline. Install the official inference code "
-        "(not on PyPI yet), then fully restart Forge Neo:\n"
-        "  pip install --no-deps git+https://github.com/ideogram-oss/ideogram4.git\n"
-        "(Forge Neo normally auto-installs this at startup for the 'ideogram4' preset; "
-        "this error means the install was skipped or failed — check your network / git / "
-        "--skip-install.)\nTried:\n  "
-        + "\n  ".join(errors)
+        "Could not import Ideogram4Pipeline. A required Ideogram 4.0 runtime package is "
+        "missing or broken. Forge Neo normally installs these at startup for the 'ideogram4' "
+        "preset, so this usually means the preflight was skipped or failed (network / git / "
+        "--skip-install). Restart with the 'ideogram4' preset, or install manually then fully "
+        "restart:\n"
+        "  python -m pip install --no-deps git+https://github.com/ideogram-oss/ideogram4.git\n"
+        "Tried:\n  " + joined
     )
 
 

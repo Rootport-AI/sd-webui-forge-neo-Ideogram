@@ -50,15 +50,13 @@ def main():
     if args.forge_ref_comfy_yaml:
         launch_utils.configure_comfy_yaml(args.forge_ref_comfy_yaml)
 
-    # Switch Transformers to match the saved UI preset (Ideogram 4.0 needs Qwen3-VL
-    # support from transformers >= 4.57). Must run before transformers is imported.
-    from modules_forge.ideogram4_transformers_mode import (
-        ensure_ideogram4_package,
-        ensure_ideogram4_transformers_mode,
-    )
+    # Preflight Ideogram 4.0 Python runtime dependencies (transformers 4.57.6 for
+    # Qwen3-VL, bitsandbytes for nf4, the official ideogram4 package) when the saved
+    # preset is 'ideogram4'; otherwise restore the standard transformers. Must run
+    # before transformers / torch are imported into the main process.
+    from modules_forge.ideogram4_transformers_mode import ensure_ideogram4_runtime
 
-    ensure_ideogram4_transformers_mode()
-    ensure_ideogram4_package()
+    ensure_ideogram4_runtime()
 
     start()
 
