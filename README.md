@@ -1,4 +1,4 @@
-## Ideogram 4.0 対応フォーク
+## Ideogram 4.0 対応フォーク / Ideogram 4.0 Compatible Fork
 
 このフォークは [Stable Diffusion WebUI Forge - Neo](https://github.com/Haoming02/sd-webui-forge-classic) に **Ideogram 4.0**（9.3B open-weight text-to-image モデル）対応を追加したものです。
 
@@ -22,8 +22,33 @@
 Plain-text mode が「off」になると、通常の Prompt / Negative Prompt は読み込まれなくなります。代わりに、UI 下部の「High-level description」以降の項目で細かくプロンプトを指定できます。これはかなり複雑なので、ChatGPT や Claude などの AI に Ideogram 4.0 用の JSON を書かせることを推奨。「Import JSON caption file」にドラッグ＆ドロップで読み込めます。
 
 <br>
----
+
+---  
+
+### Quick Start Guide
+
+1. Create an empty folder in your preferred location and open it in Codex or Claude Code.
+2. Show the AI the URL of this repository and tell it, “I want to install this.” https://github.com/Rootport-AI/sd-webui-forge-neo-Ideogram/tree/feature/ideogram4 (Note: Make sure to provide the URL ending with “tree/feature/ideogram4”)
+3. Once the installation is complete, double-click the file named “webui.bat.” SD WebUI Forge will launch.
+4. Select “ideogram4” from the dropdown list in the top-left corner of the screen.
+5. Close the Command Prompt and shut down the server (*Important*)
+6. Double-click webui.bat to restart the server. The components required for Ideogram 4.0 will be automatically downloaded.
+7. Create a read token on HuggingFace. Ask the AI how to do this!
+8. Return to Forge Neo, go to Settings → search for “HF token” → paste the read token created in step 7 into the HF token field → Apply settings. (Note: This setting is required to download weights and other data from the official Ideogram HuggingFace repository.)
+9. Return to the txt2img tab and check the “Plain-text mode” checkbox. For Low VRAM mode, select “16GB.” Test the functionality by entering a prompt of your choice and clicking the “GENERATE” button for an image around 512x512 in size. (Note: Negative prompts are not required.)
+
+> [!Warning]
+> **Plain-text mode is not recommended**
+>
+> There is a bug where even very ordinary prompts can trigger the safety filter, resulting in an “Image blocked by safety filter” error. This is an internal bug in the Ideogram 4.0 model, so it cannot be resolved by the user. It is better to keep Plain-text mode “off”.
+
+When Plain-text mode is set to “off,” standard Prompts and Negative Prompts will no longer be loaded. Instead, you can specify detailed prompts in the fields starting with “High-level description” at the bottom of the UI. Since this is quite complex, we recommend having an AI like ChatGPT or Claude generate the JSON file for Ideogram 4.0. You can import it by dragging and dropping it into the “Import JSON caption file” section.
+
+Translated with DeepL.com (free version)
+---  
+
 <br>
+
 <h1 align="center">Stable Diffusion WebUI Forge - Neo</h1>
 
 <p align="center"><sup>
