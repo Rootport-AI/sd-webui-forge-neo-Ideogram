@@ -22,6 +22,35 @@ The name "Forge" is inspired by "Minecraft Forge". This project aims to become t
 
 <br>
 
+---
+
+## Ideogram 4.0 対応フォーク
+
+このフォークは [Stable Diffusion WebUI Forge - Neo](https://github.com/Haoming02/sd-webui-forge-classic) に **Ideogram 4.0**（9.3B open-weight text-to-image モデル）対応を追加したものです。
+
+### スピードガイド
+
+1. 好きな場所に空のフォルダを作り、CodexまたはClaude Codeで開く。
+2. AIに僕のGithubのURLを見せて「これをインストールしたい」と伝える。https://github.com/Rootport-AI/sd-webui-forge-neo-Ideogram/tree/feature/ideogram4 （※末尾が「tree/feature/ideogram4」のURLを伝えること）
+3. インストールが終わったら、「webui.bat」というファイルをダブルクリック。SD WebUI Forgeが立ち上がる。
+4. 画面左上のドロップダウンリストから「ideogram4」を選択。
+5. 一旦コマンドプロンプトを閉じて、サーバーを終了する（※重要）
+6. webui.batをダブルクリックしてサーバーを再起動。Ideogram 4.0に必要なコンポーネントが自動的に追加DLされる。
+7. HuggingFaceでread tokenを作る。作り方はAIに訊いてね！
+8. Forge neoに戻り、settings → HF tokenで検索 → HF tokenの記入欄に「7.」で作ったread tokenを貼り付け → Apply settings。
+9. txt2imgタブに戻り「Plain-text mode」のチェックボックスを入れる。Low VRAM modeは「16GB」を選択。512x512くらいのサイズで、適当なプロンプトで「GENERATE」ボタンを押して動作確認。（※ネガティブプロンプトは不要）
+
+> [!Warning]
+> **Plain-text mode は非推奨**
+>
+> ごく平凡なプロンプトでも検閲に引っかかり、「Image blocked by safety filter」になるバグがあります。これは Ideogram 4.0 のモデル内部のバグなので、ユーザー側では対処できません。Plain-text mode は「off」のほうがいいです。
+
+Plain-text mode が「off」になると、通常の Prompt / Negative Prompt は読み込まれなくなります。代わりに、UI 下部の「High-level description」以降の項目で細かくプロンプトを指定できます。これはかなり複雑なので、ChatGPT や Claude などの AI に Ideogram 4.0 用の JSON を書かせることを推奨。「Import JSON caption file」にドラッグ＆ドロップで読み込めます。
+
+---
+
+<br>
+
 ## Features [Jun.]
 > Most base features of the original [Automatic1111 Webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) should still function
 
