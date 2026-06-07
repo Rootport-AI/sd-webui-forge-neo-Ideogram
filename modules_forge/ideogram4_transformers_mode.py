@@ -108,6 +108,55 @@ def _verify(code: str):
     return result.returncode == 0, (result.stderr or "").strip()
 
 
+def _run_cmd(cmd):
+    """Run a subprocess command. Returns (ok, combined stderr+stdout)."""
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    except Exception as e:
+        return False, str(e)
+    return result.returncode == 0, ((result.stderr or "") + (result.stdout or "")).strip()
+
+
+def _pip_available() -> bool:
+    return _run_cmd([sys.executable, "-m", "pip", "--version"])[0]
+
+
+def _ensure_pip(args) -> bool:
+    """Make sure the venv can install packages before the preflight tries to.
+
+    Clean venvs (e.g. created without --seed) can lack pip entirely, which would make
+    every dependency install fail silently. We bootstrap pip via ensurepip; if that
+    cannot be done we abort the installs with a clear message instead.
+
+    When running under uv (--uv / --uv-symlink / --uv-local-cache), installs go through
+    `uv pip`, so a missing venv pip is irrelevant — skip the check.
+    """
+    if any(getattr(args, a, False) for a in ("uv", "uv_symlink", "uv_local_cache")):
+        return True
+
+    if _pip_available():
+        return True
+
+    if getattr(args, "skip_install", False):
+        _log(LOG_RUNTIME, "pip is not available in this venv and --skip-install is set; cannot install "
+                          "Ideogram 4.0 dependencies. Recreate the venv WITH pip (e.g. `uv venv venv --seed` "
+                          "or `python -m venv venv`).")
+        return False
+
+    _log(LOG_RUNTIME, "pip not found in this venv; bootstrapping it with ensurepip ...")
+    ok, err = _run_cmd([sys.executable, "-m", "ensurepip", "--upgrade"])
+    if ok and _pip_available():
+        _log(LOG_RUNTIME, "pip bootstrapped successfully")
+        return True
+
+    _log(LOG_RUNTIME, "pip is NOT available in this venv and could not be bootstrapped (ensurepip failed). "
+                      "Ideogram 4.0 dependencies cannot be auto-installed. Recreate the venv WITH pip — e.g. "
+                      "`uv venv venv --python 3.13 --seed` (--seed provides pip) or `python -m venv venv` — "
+                      "then fully restart."
+                      + (f"\nensurepip output:\n{err}" if err else ""))
+    return False
+
+
 def _pip_install(req) -> bool:
     from modules import launch_utils
 
@@ -258,6 +307,9 @@ def _run_preflight():
         _log(LOG_RUNTIME, "another process is running the Ideogram 4.0 preflight; skipping")
         return
     try:
+        # A venv without pip would make every install below fail silently — handle it first.
+        if not _ensure_pip(args):
+            return
         for req in IDEOGRAM4_RUNTIME_REQUIREMENTS:
             _ensure_requirement(req, args.skip_install)
         _final_verify()

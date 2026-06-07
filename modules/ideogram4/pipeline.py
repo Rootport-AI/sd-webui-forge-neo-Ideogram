@@ -44,22 +44,27 @@ def _import_pipeline_class():
 
     # A missing runtime dependency (e.g. bitsandbytes for nf4) shows up here as the
     # underlying ImportError while importing the ideogram4 package — give it specific help.
+    preflight_hint = (
+        "Ideogram 4.0 startup preflight did not complete — check the [Ideogram4/runtime] lines "
+        "in the startup log. In some environments pip is missing from the venv (recreate it with "
+        "`uv venv venv --python 3.13 --seed`, then fully restart)."
+    )
+
     if "bitsandbytes" in joined:
         raise Ideogram4Error(
             "Could not import Ideogram4Pipeline because the Ideogram 4.0 runtime dependency "
             "'bitsandbytes' (needed for nf4) is missing or broken.\n"
-            "Restart Forge Neo with the 'ideogram4' preset to let startup install it, or "
-            "install it manually in this venv and fully restart:\n"
+            f"{preflight_hint}\n"
+            "Or install it manually in this venv and fully restart:\n"
             "  python -m pip install --no-deps bitsandbytes==0.49.2\n"
             "Tried:\n  " + joined
         )
 
     raise Ideogram4Error(
         "Could not import Ideogram4Pipeline. A required Ideogram 4.0 runtime package is "
-        "missing or broken. Forge Neo normally installs these at startup for the 'ideogram4' "
-        "preset, so this usually means the preflight was skipped or failed (network / git / "
-        "--skip-install). Restart with the 'ideogram4' preset, or install manually then fully "
-        "restart:\n"
+        "missing or broken.\n"
+        f"{preflight_hint}\n"
+        "Or install it manually then fully restart:\n"
         "  python -m pip install --no-deps git+https://github.com/ideogram-oss/ideogram4.git\n"
         "Tried:\n  " + joined
     )
