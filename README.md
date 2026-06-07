@@ -44,7 +44,6 @@ Plain-text mode が「off」になると、通常の Prompt / Negative Prompt �
 
 When Plain-text mode is set to “off,” standard Prompts and Negative Prompts will no longer be loaded. Instead, you can specify detailed prompts in the fields starting with “High-level description” at the bottom of the UI. Since this is quite complex, we recommend having an AI like ChatGPT or Claude generate the JSON file for Ideogram 4.0. You can import it by dragging and dropping it into the “Import JSON caption file” section.
 
-Translated with DeepL.com (free version)
 ---  
 
 <br>
